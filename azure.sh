@@ -388,16 +388,15 @@ fi
 # 6. POST PR STATUS TO BLOCK/UNBLOCK MERGE BASED ON CRITICAL/HIGH ISSUES
 echo "Posting PR status..."
 
-# Determine status based on critical/high issues
+# Determine status based on critical issues only
 CRITICAL_ISSUES=$(echo "$API_RESPONSE_BODY" | jq -r '.summary.critical // 0')
-HIGH_ISSUES=$(echo "$API_RESPONSE_BODY" | jq -r '.summary.high // 0')
 
-if [ "$CRITICAL_ISSUES" -gt 0 ] || [ "$HIGH_ISSUES" -gt 0 ]; then
+if [ "$CRITICAL_ISSUES" -gt 0 ]; then
   PR_STATUS="failed"
-  PR_DESCRIPTION="Found $CRITICAL_ISSUES critical and $HIGH_ISSUES high severity issues that must be addressed"
+  PR_DESCRIPTION="Found $CRITICAL_ISSUES critical severity issues that must be addressed"
 else
   PR_STATUS="succeeded"
-  PR_DESCRIPTION="No critical or high severity issues found"
+  PR_DESCRIPTION="No critical severity issues found"
 fi
 
 # Azure DevOps PR Status API
