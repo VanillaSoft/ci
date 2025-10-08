@@ -266,8 +266,9 @@ else
         message=$(echo "$praise_json" | jq -r '.message')
         category=$(echo "$praise_json" | jq -r '.category')
 
-        # ADO link format is different
-        file_link="[$file_path:$line_number]($BUILD_REPOSITORY_URI?path=/$file_path&version=GC$SYSTEM_PULLREQUEST_SOURCECOMMITID&line=$line_number)"
+        # ADO link format - URL encode the file path
+        encoded_file_path=$(printf '%s' "$file_path" | sed 's/ /%20/g')
+        file_link="[$file_path:$line_number]($BUILD_REPOSITORY_URI?path=/$encoded_file_path&version=GC$SYSTEM_PULLREQUEST_SOURCECOMMITID&line=$line_number)"
         formatted_category=$(echo "$category" | sed -e 's/_/ /g' -e 's/\b\(.\)/\u\1/g')
 
         echo "- ✅ **$formatted_category** in $file_link" >> "$COMMENT_FILE"
@@ -331,7 +332,9 @@ else
           "syntax") category_emoji="📝" ;;
         esac
 
-        file_link="[$file_path:$line_number]($BUILD_REPOSITORY_URI?path=/$file_path&version=GC$SYSTEM_PULLREQUEST_SOURCECOMMITID&line=$line_number)"
+        # URL encode the file path for the link
+        encoded_file_path=$(printf '%s' "$file_path" | sed 's/ /%20/g')
+        file_link="[$file_path:$line_number]($BUILD_REPOSITORY_URI?path=/$encoded_file_path&version=GC$SYSTEM_PULLREQUEST_SOURCECOMMITID&line=$line_number)"
         formatted_category=$(echo "$category" | sed -e 's/_/ /g' -e 's/\b\(.\)/\u\1/g')
 
         echo "- $emoji **$severity** in $file_link ($category_emoji $formatted_category)" >> "$COMMENT_FILE"
