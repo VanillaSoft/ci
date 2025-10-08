@@ -194,6 +194,15 @@ if echo "$API_RESPONSE_BODY" | jq -e . > /dev/null 2>&1; then
           inline_comment_content+="$suggestion"
         fi
 
+        # Add AI-assist YAML block to inline comment
+        ai_assist_block=$(printf "\n\n---\n\n**🤖 AI-Assisted Fix (copy this):**\n\`\`\`yaml\n- file: %s\n  line: %s\n  severity: %s\n  category: %s\n  message: |\n    %s" "$file_path" "$line_number" "$severity" "$category" "$message")
+        if [ -n "$suggested_fix" ] && [ "$suggested_fix" != "null" ] && [ "$suggested_fix" != "" ]; then
+          sanitized_fix=$(echo "$suggested_fix" | sed -E 's/^```[a-zA-Z]*n?//g' | sed 's/```$//g')
+          ai_assist_block+=$(printf "\n  suggested_fix: |\n%s" "$(echo "$sanitized_fix" | sed 's/^/    /')")
+        fi
+        ai_assist_block+=$(printf "\n\`\`\`")
+        inline_comment_content+="$ai_assist_block"
+
         # Determine thread status based on severity
         # 1 = Active, 3 = Won't Fix (requires action)
         thread_status=1
@@ -332,42 +341,6 @@ else
           echo "$sanitized_fix" >> "$COMMENT_FILE"
           echo '```' >> "$COMMENT_FILE"
         fi
-        echo "" >> "$COMMENT_FILE"
-      done
-
-      # --- AI-Assisted Fix Section (Individual Blocks) ---
-      echo "" >> "$COMMENT_FILE"
-      echo "---" >> "$COMMENT_FILE"
-      echo "<br>" >> "$COMMENT_FILE"
-      echo "" >> "$COMMENT_FILE"
-      echo "**🤖 For AI-Assisted Fix (Copy the relevant block below)**" >> "$COMMENT_FILE"
-      echo "" >> "$COMMENT_FILE"
-
-      echo "$API_RESPONSE_BODY" | jq -r '.review.issues[] | @json' | while IFS= read -r issue_json; do
-        file_path=$(echo "$issue_json" | jq -r '.file_path')
-        line_number=$(echo "$issue_json" | jq -r '.line_number')
-        message=$(echo "$issue_json" | jq -r '.message')
-        severity=$(echo "$issue_json" | jq -r '.severity')
-        category=$(echo "$issue_json" | jq -r '.category')
-        suggested_fix=$(echo "$issue_json" | jq -r '.suggested_fix // ""')
-
-        echo "---" >> "$COMMENT_FILE"
-        echo "" >> "$COMMENT_FILE"
-        echo "**Issue in \`$file_path:$line_number\`**" >> "$COMMENT_FILE"
-        echo '```yaml' >> "$COMMENT_FILE"
-        echo "- file: $file_path" >> "$COMMENT_FILE"
-        echo "  line: $line_number" >> "$COMMENT_FILE"
-        echo "  severity: $severity" >> "$COMMENT_FILE"
-        echo "  category: $category" >> "$COMMENT_FILE"
-        echo "  message: |" >> "$COMMENT_FILE"
-        echo "    $message" >> "$COMMENT_FILE"
-        if [ -n "$suggested_fix" ] && [ "$suggested_fix" != "null" ] && [ "$suggested_fix" != "" ]; then
-          sanitized_fix=$(echo "$suggested_fix" | sed -E 's/^```[a-zA-Z]*n?//g' | sed 's/```$//g')
-          echo "  suggested_fix: |" >> "$COMMENT_FILE"
-          # Use sed to indent the suggested fix block
-          echo "$sanitized_fix" | sed 's/^/    /' >> "$COMMENT_FILE"
-        fi
-        echo '```' >> "$COMMENT_FILE"
         echo "" >> "$COMMENT_FILE"
       done
     fi
