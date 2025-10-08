@@ -37,7 +37,95 @@ API_RESPONSE_BODY=$(curl -s -X POST "$REVIEW_API_URL" \
 # 2. DEBUG LOGGING
 echo "--- Raw API Response Received ---"; echo "$API_RESPONSE_BODY"; echo "---------------------------------"
 
-# 3. PARSE RESPONSE AND BUILD THE FORMATTED COMMENT IN A FILE
+# 3. PARSE RESPONSE AND POST INLINE COMMENTS FOR ISSUES
+ADO_API_URL="${SYSTEM_TEAMFOUNDATIONCOLLECTIONURI}${SYSTEM_TEAMPROJECT}/_apis/git/repositories/${BUILD_REPOSITORY_ID}/pullRequests/${SYSTEM_PULLREQUEST_PULLREQUESTID}/threads?api-version=6.0"
+
+# Function to post a comment thread
+post_thread() {
+  local payload="$1"
+  local post_response
+  local http_status
+  local response_body
+
+  post_response=$(curl -s -X POST "$ADO_API_URL" \
+    -H "Authorization: Bearer $ADO_PERSONAL_ACCESS_TOKEN" \
+    -H "Content-Type: application/json" \
+    --data "$payload" -w "\n%{http_code}")
+
+  http_status=$(echo "$post_response" | tail -n1)
+  response_body=$(echo "$post_response" | sed '$d')
+
+  if [ "$http_status" -ge 200 ] && [ "$http_status" -lt 300 ]; then
+    echo "Successfully posted an inline comment."
+  else
+    echo "Error posting an inline comment. HTTP Status: $http_status"
+    echo "Response: $response_body"
+  fi
+}
+
+if echo "$API_RESPONSE_BODY" | jq -e . > /dev/null 2>&1; then
+  TOTAL_ISSUES=$(echo "$API_RESPONSE_BODY" | jq -r '.summary.total_issues // 0')
+  if [ "$TOTAL_ISSUES" -gt 0 ]; then
+    echo "Posting inline comments for issues..."
+    echo "$API_RESPONSE_BODY" | jq -r '.review.issues[] | @json' | while IFS= read -r issue_json; do
+      file_path=$(echo "$issue_json" | jq -r '.file_path')
+      line_number=$(echo "$issue_json" | jq -r '.line_number')
+
+      if [ -n "$file_path" ] && [ "$file_path" != "null" ] && [ -n "$line_number" ] && [ "$line_number" != "null" ]; then
+        message=$(echo "$issue_json" | jq -r '.message')
+        severity=$(echo "$issue_json" | jq -r '.severity')
+        category=$(echo "$issue_json" | jq -r '.category')
+        suggested_fix=$(echo "$issue_json" | jq -r '.suggested_fix // ""')
+
+        emoji="⚪️"
+        case "$severity" in
+          "critical") emoji="🟣" ;;
+          "high") emoji="🔴" ;;
+          "medium") emoji="🟠" ;;
+          "low") emoji="🟡" ;;
+        esac
+
+        category_emoji="📝" # Default emoji
+        case "$category" in
+          "bug") category_emoji="🐞" ;;
+          "security") category_emoji="🛡️" ;;
+          "best_practice") category_emoji="✨" ;;
+          "dependency") category_emoji="📦" ;;
+          "performance") category_emoji="🚀" ;;
+          "rbac") category_emoji="🔑" ;;
+          "syntax") category_emoji="📝" ;;
+        esac
+
+        formatted_category=$(echo "$category" | sed -e 's/_/ /g' -e 's/\b\(.\)/\u\1/g')
+
+        inline_comment_content="$emoji **$severity ($category_emoji $formatted_category):**\n\n$message"
+        if [ -n "$suggested_fix" ] && [ "$suggested_fix" != "null" ] && [ "$suggested_fix" != "" ]; then
+          sanitized_fix=$(echo "$suggested_fix" | sed -E 's/^```[a-zA-Z]*n?//g' | sed 's/```$//g')
+          inline_comment_content="$inline_comment_content\n\n**💡 Suggested Fix:**\n\`\`\`\n$sanitized_fix\n\`\`\`"
+        fi
+
+        inline_payload=$(jq -n \
+          --arg content "$inline_comment_content" \
+          --arg file_path "/$file_path" \
+          --argjson line_number "$line_number" \
+          '{
+            "comments": [{"parentCommentId": 0, "content": $content, "commentType": 1}],
+            "status": 1,
+            "threadContext": {
+              "filePath": $file_path,
+              "rightFileStart": {"line": $line_number, "offset": 1},
+              "rightFileEnd": {"line": $line_number, "offset": 2}
+            }
+          }')
+
+        post_thread "$inline_payload"
+      fi
+    done
+  fi
+fi
+
+
+# 4. PARSE RESPONSE AND BUILD THE FORMATTED SUMMARY COMMENT IN A FILE
 COMMENT_FILE="comment.md"
 > "$COMMENT_FILE"
 
@@ -63,10 +151,9 @@ else
         line_number=$(echo "$praise_json" | jq -r '.line_number')
         message=$(echo "$praise_json" | jq -r '.message')
         category=$(echo "$praise_json" | jq -r '.category')
-        
+
         # ADO link format is different
-        safe_file_path=$(echo "$file_path" | sed 's/ /%20/g')
-        file_link="[$file_path:$line_number]($BUILD_REPOSITORY_URI?path=/$safe_file_path&version=GC$SYSTEM_PULLREQUEST_SOURCECOMMITID&line=$line_number)"
+        file_link="[$file_path:$line_number]($BUILD_REPOSITORY_URI?path=/$file_path&version=GC$SYSTEM_PULLREQUEST_SOURCECOMMITID&line=$line_number)"
         formatted_category=$(echo "$category" | sed -e 's/_/ /g' -e 's/\b\(.\)/\u\1/g')
 
         echo "- ✅ **$formatted_category** in $file_link" >> "$COMMENT_FILE"
@@ -79,13 +166,15 @@ else
     if [ "$TOTAL_ISSUES" -gt 0 ]; then
       # ... (This section is identical to the bitbucket script)
       HIGH_ISSUES=$(echo "$API_RESPONSE_BODY" | jq -r '.summary.high // 0')
-      MEDIUM_ISSUES=$(echo "$API_RESPONSE_BODY" | jq -r '.summary.medium // 0') 
+      MEDIUM_ISSUES=$(echo "$API_RESPONSE_BODY" | jq -r '.summary.medium // 0')
       LOW_ISSUES=$(echo "$API_RESPONSE_BODY" | jq -r '.summary.low // 0')
       CRITICAL_ISSUES=$(echo "$API_RESPONSE_BODY" | jq -r '.summary.critical // 0')
-      
+
       echo "### ⚠️ Issues Found ($TOTAL_ISSUES)" >> "$COMMENT_FILE"
       echo "" >> "$COMMENT_FILE"
-      
+      echo "> 💡 **AI-Assisted Fix**: Copy this entire comment and paste it into Gemini to automatically address these issues." >> "$COMMENT_FILE"
+      echo "" >> "$COMMENT_FILE"
+
       echo "| Severity | Count |" >> "$COMMENT_FILE"
       echo "| :--- | :---: |" >> "$COMMENT_FILE"
       if [ "$CRITICAL_ISSUES" -gt 0 ]; then
@@ -110,15 +199,15 @@ else
         severity=$(echo "$issue_json" | jq -r '.severity')
         category=$(echo "$issue_json" | jq -r '.category')
         suggested_fix=$(echo "$issue_json" | jq -r '.suggested_fix // ""')
-        
+
         emoji="⚪️"
         case "$severity" in
-          "critical") emoji="🟣" ;; 
-          "high") emoji="🔴" ;; 
-          "medium") emoji="🟠" ;; 
-          "low") emoji="🟡" ;; 
+          "critical") emoji="🟣" ;;
+          "high") emoji="🔴" ;;
+          "medium") emoji="🟠" ;;
+          "low") emoji="🟡" ;;
         esac
-        
+
         category_emoji="📝" # Default emoji
         case "$category" in
           "bug") category_emoji="🐞" ;;
@@ -129,19 +218,18 @@ else
           "rbac") category_emoji="🔑" ;;
           "syntax") category_emoji="📝" ;;
         esac
-        
-        safe_file_path=$(echo "$file_path" | sed 's/ /%20/g')
-        file_link="[$file_path:$line_number]($BUILD_REPOSITORY_URI?path=/$safe_file_path&version=GC$SYSTEM_PULLREQUEST_SOURCECOMMITID&line=$line_number)"
+
+        file_link="[$file_path:$line_number]($BUILD_REPOSITORY_URI?path=/$file_path&version=GC$SYSTEM_PULLREQUEST_SOURCECOMMITID&line=$line_number)"
         formatted_category=$(echo "$category" | sed -e 's/_/ /g' -e 's/\b\(.\)/\u\1/g')
 
         echo "- $emoji **$severity** in $file_link ($category_emoji $formatted_category)" >> "$COMMENT_FILE"
         echo "" >> "$COMMENT_FILE"
         echo "$message" >> "$COMMENT_FILE"
         echo "" >> "$COMMENT_FILE"
-        
+
         if [ -n "$suggested_fix" ] && [ "$suggested_fix" != "null" ] && [ "$suggested_fix" != "" ]; then
           sanitized_fix=$(echo "$suggested_fix" | sed -E 's/^```[a-zA-Z]*n?//g' | sed 's/```$//g')
-          
+
           echo "**💡 Suggested Fix:**" >> "$COMMENT_FILE"
           echo '```' >> "$COMMENT_FILE"
           echo "$sanitized_fix" >> "$COMMENT_FILE"
@@ -153,14 +241,14 @@ else
   fi
 fi
 
-# 4. POST THE FORMATTED COMMENT TO AZURE DEVOPS
-echo "--- Final Comment Content ---"
+# 5. POST THE FORMATTED SUMMARY COMMENT TO AZURE DEVOPS
+echo "--- Final Summary Comment Content ---"
 cat "$COMMENT_FILE"
 echo "---------------------------"
 
 # Azure DevOps API requires a specific JSON structure for creating a PR thread
 JSON_PAYLOAD=$(jq -n --rawfile content "$COMMENT_FILE" \
-  '{ 
+  '{
     "comments": [
       {
         "parentCommentId": 0,
@@ -171,8 +259,6 @@ JSON_PAYLOAD=$(jq -n --rawfile content "$COMMENT_FILE" \
     "status": 1
   }')
 
-ADO_API_URL="${SYSTEM_TEAMFOUNDATIONCOLLECTIONURI}${SYSTEM_TEAMPROJECT}/_apis/git/repositories/${BUILD_REPOSITORY_ID}/pullRequests/${SYSTEM_PULLREQUEST_PULLREQUESTID}/threads?api-version=6.0"
-
 POST_RESPONSE=$(curl -s -X POST "$ADO_API_URL" \
   -H "Authorization: Bearer $ADO_PERSONAL_ACCESS_TOKEN" \
   -H "Content-Type: application/json" \
@@ -182,9 +268,9 @@ HTTP_STATUS=$(echo "$POST_RESPONSE" | tail -n1)
 RESPONSE_BODY=$(echo "$POST_RESPONSE" | sed '$d')
 
 if [ "$HTTP_STATUS" -ge 200 ] && [ "$HTTP_STATUS" -lt 300 ]; then
-  echo "Successfully posted comment to pull request."
+  echo "Successfully posted summary comment to pull request."
 else
-  echo "Error posting comment to pull request. HTTP Status: $HTTP_STATUS"
+  echo "Error posting summary comment to pull request. HTTP Status: $HTTP_STATUS"
   echo "Response: $RESPONSE_BODY"
   exit 1
 fi
