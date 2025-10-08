@@ -66,6 +66,55 @@ post_thread() {
   fi
 }
 
+# Function to resolve old bot summary comments
+resolve_old_summary_comments() {
+  echo "Resolving old bot summary comments..."
+  local existing_threads_response
+  existing_threads_response=$(curl -s -X GET "$ADO_API_URL" \
+    -H "Authorization: Bearer $ADO_PERSONAL_ACCESS_TOKEN" \
+    -H "Content-Type: application/json")
+
+  if ! echo "$existing_threads_response" | jq -e . > /dev/null 2>&1; then
+    echo "Warning: Could not fetch existing threads to resolve old summaries."
+    return
+  fi
+
+  # Find threads that are summary comments (no threadContext) and contain our signature
+  echo "$existing_threads_response" | jq -r '.value[] | select(.threadContext == null) | @json' | while IFS= read -r thread_json; do
+    local thread_id
+    local first_comment_content
+
+    thread_id=$(echo "$thread_json" | jq -r '.id')
+    first_comment_content=$(echo "$thread_json" | jq -r '.comments[0].content // ""')
+
+    # Check if this is our bot's summary comment
+    if echo "$first_comment_content" | grep -q "Automated Code Review Results"; then
+      echo "Resolving old summary comment (thread ID: $thread_id)..."
+
+      # Update thread status to "closed" (status: 4 in ADO)
+      local update_payload
+      update_payload=$(jq -n '{"status": 4}')
+
+      local update_response
+      local thread_update_url="${SYSTEM_TEAMFOUNDATIONCOLLECTIONURI}${SYSTEM_TEAMPROJECT}/_apis/git/repositories/${BUILD_REPOSITORY_ID}/pullRequests/${SYSTEM_PULLREQUEST_PULLREQUESTID}/threads/${thread_id}?api-version=6.0"
+
+      update_response=$(curl -s -X PATCH "$thread_update_url" \
+        -H "Authorization: Bearer $ADO_PERSONAL_ACCESS_TOKEN" \
+        -H "Content-Type: application/json" \
+        --data "$update_payload" -w "\n%{http_code}")
+
+      local http_status
+      http_status=$(echo "$update_response" | tail -n1)
+
+      if [ "$http_status" -ge 200 ] && [ "$http_status" -lt 300 ]; then
+        echo "Successfully resolved thread $thread_id"
+      else
+        echo "Warning: Could not resolve thread $thread_id (HTTP $http_status)"
+      fi
+    fi
+  done
+}
+
 # Function to get existing threads and populate a lookup map to avoid duplicate comments
 populate_existing_comments_map() {
   echo "Fetching existing comment threads to prevent duplicates..."
@@ -320,7 +369,11 @@ else
   fi
 fi
 
-# 5. POST THE FORMATTED SUMMARY COMMENT TO AZURE DEVOPS
+# 5. RESOLVE OLD SUMMARY COMMENTS AND POST NEW ONE TO AZURE DEVOPS
+
+# First, resolve old summary comments to reduce clutter
+resolve_old_summary_comments
+
 echo "--- Final Summary Comment Content ---"
 cat "$COMMENT_FILE"
 echo "---------------------------"
