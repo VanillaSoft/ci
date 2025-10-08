@@ -198,13 +198,22 @@ if echo "$API_RESPONSE_BODY" | jq -e . > /dev/null 2>&1; then
           inline_comment_content+="$suggestion"
         fi
 
+        # Determine thread status based on severity
+        # 1 = Active, 3 = Won't Fix (requires action)
+        thread_status=1
+        case "$severity" in
+          "critical"|"high") thread_status=3 ;;  # Won't Fix = requires action/blocks merge
+          "medium"|"low") thread_status=1 ;;     # Active = FYI, doesn't block
+        esac
+
         inline_payload=$(jq -n \
           --arg content "$inline_comment_content" \
           --arg file_path "/$file_path" \
           --argjson line_number "$line_number" \
+          --argjson status "$thread_status" \
           '{
             "comments": [{"parentCommentId": 0, "content": $content, "commentType": 1}],
-            "status": 1,
+            "status": $status,
             "threadContext": {
               "filePath": $file_path,
               "rightFileStart": {"line": $line_number, "offset": 1},
