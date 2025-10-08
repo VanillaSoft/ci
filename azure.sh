@@ -131,15 +131,21 @@ populate_existing_comments_map() {
   fi
 
   # Use process substitution to avoid subshell and preserve array modifications
+  # Only track threads that have active (non-deleted) comments
   while IFS= read -r thread_json; do
     local file_path
     local line_number
     local location_key
+    local active_comments
 
     file_path=$(echo "$thread_json" | jq -r '.threadContext.filePath')
     line_number=$(echo "$thread_json" | jq -r '.threadContext.rightFileStart.line')
 
-    if [ -n "$file_path" ] && [ "$file_path" != "null" ] && [ -n "$line_number" ] && [ "$line_number" != "null" ]; then
+    # Count non-deleted comments in this thread
+    active_comments=$(echo "$thread_json" | jq '[.comments[] | select(.isDeleted != true)] | length')
+
+    # Only add to duplicate map if thread has active comments
+    if [ -n "$file_path" ] && [ "$file_path" != "null" ] && [ -n "$line_number" ] && [ "$line_number" != "null" ] && [ "$active_comments" -gt 0 ]; then
       location_key="${file_path}:${line_number}"
       existing_comment_locations["$location_key"]=1
     fi
