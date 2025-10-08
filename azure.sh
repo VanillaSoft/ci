@@ -38,7 +38,7 @@ API_RESPONSE_BODY=$(curl -s -X POST "$REVIEW_API_URL" \
 echo "--- Raw API Response Received ---"; echo "$API_RESPONSE_BODY"; echo "---------------------------------"
 
 # 3. PARSE RESPONSE AND POST INLINE COMMENTS FOR ISSUES
-ADO_API_URL="${SYSTEM_TEAMFOUNDATIONCOLLECTIONURI}${SYSTEM_TEAMPROJECT}/_apis/git/repositories/${BUILD_REPOSITORY_ID}/pullRequests/${SYSTEM_PULLREQUEST_PULLREQUESTID}/threads?api-version=6.0"
+ADO_API_URL="${SYSTEM_TEAMFOUNDATIONCOLLECTIONURI}${SYSTEM_TEAMPROJECT}/_apis/git/repositories/${BUILD_REPOSITORY_ID}/pullRequests/${SYSTEM_PULLREQUEST_PULLREQUESTID}/threads?api-version=7.1"
 
 # Use an associative array to store locations of existing comments
 declare -A existing_comment_locations
@@ -90,12 +90,16 @@ delete_old_summary_comments() {
 
     # Check if this is our bot's summary comment
     if echo "$first_comment_content" | grep -q "Automated Code Review Results"; then
-      echo "Deleting old summary comment (thread ID: $thread_id)..."
+      # Get the comment ID (first comment in the thread)
+      local comment_id
+      comment_id=$(echo "$thread_json" | jq -r '.comments[0].id')
+
+      echo "Deleting old summary comment (thread ID: $thread_id, comment ID: $comment_id)..."
 
       local delete_response
-      local thread_delete_url="${SYSTEM_TEAMFOUNDATIONCOLLECTIONURI}${SYSTEM_TEAMPROJECT}/_apis/git/repositories/${BUILD_REPOSITORY_ID}/pullRequests/${SYSTEM_PULLREQUEST_PULLREQUESTID}/threads/${thread_id}?api-version=6.0"
+      local comment_delete_url="${SYSTEM_TEAMFOUNDATIONCOLLECTIONURI}${SYSTEM_TEAMPROJECT}/_apis/git/repositories/${BUILD_REPOSITORY_ID}/pullRequests/${SYSTEM_PULLREQUEST_PULLREQUESTID}/threads/${thread_id}/comments/${comment_id}?api-version=7.1"
 
-      delete_response=$(curl -s -X DELETE "$thread_delete_url" \
+      delete_response=$(curl -s -X DELETE "$comment_delete_url" \
         -H "Authorization: Bearer $ADO_PERSONAL_ACCESS_TOKEN" \
         -H "Content-Type: application/json" \
         -w "\n%{http_code}")
@@ -104,9 +108,9 @@ delete_old_summary_comments() {
       http_status=$(echo "$delete_response" | tail -n1)
 
       if [ "$http_status" -ge 200 ] && [ "$http_status" -lt 300 ]; then
-        echo "Successfully deleted thread $thread_id"
+        echo "Successfully deleted comment in thread $thread_id"
       else
-        echo "Warning: Could not delete thread $thread_id (HTTP $http_status)"
+        echo "Warning: Could not delete comment in thread $thread_id (HTTP $http_status)"
         echo "Response body: $(echo "$delete_response" | sed '$d')"
       fi
     fi
@@ -208,22 +212,13 @@ if echo "$API_RESPONSE_BODY" | jq -e . > /dev/null 2>&1; then
         ai_assist_block+=$(printf "\n\`\`\`")
         inline_comment_content+="$ai_assist_block"
 
-        # Determine thread status based on severity
-        # 1 = Active, 3 = Won't Fix (requires action)
-        thread_status=1
-        case "$severity" in
-          "critical"|"high") thread_status=3 ;;  # Won't Fix = requires action/blocks merge
-          "medium"|"low") thread_status=1 ;;     # Active = FYI, doesn't block
-        esac
-
         inline_payload=$(jq -n \
           --arg content "$inline_comment_content" \
           --arg file_path "/$file_path" \
           --argjson line_number "$line_number" \
-          --argjson status "$thread_status" \
           '{
             "comments": [{"parentCommentId": 0, "content": $content, "commentType": 1}],
-            "status": $status,
+            "status": 1,
             "threadContext": {
               "filePath": $file_path,
               "rightFileStart": {"line": $line_number, "offset": 1},
@@ -406,7 +401,7 @@ else
 fi
 
 # Azure DevOps PR Status API
-PR_STATUS_URL="${SYSTEM_TEAMFOUNDATIONCOLLECTIONURI}${SYSTEM_TEAMPROJECT}/_apis/git/repositories/${BUILD_REPOSITORY_ID}/pullRequests/${SYSTEM_PULLREQUEST_PULLREQUESTID}/statuses?api-version=6.0"
+PR_STATUS_URL="${SYSTEM_TEAMFOUNDATIONCOLLECTIONURI}${SYSTEM_TEAMPROJECT}/_apis/git/repositories/${BUILD_REPOSITORY_ID}/pullRequests/${SYSTEM_PULLREQUEST_PULLREQUESTID}/statuses?api-version=7.1"
 
 PR_STATUS_PAYLOAD=$(jq -n \
   --arg state "$PR_STATUS" \
