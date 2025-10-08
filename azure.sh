@@ -80,7 +80,8 @@ delete_old_summary_comments() {
   fi
 
   # Find threads that are summary comments (no threadContext) and contain our signature
-  echo "$existing_threads_response" | jq -r '.value[] | select(.threadContext == null) | @json' | while IFS= read -r thread_json; do
+  # Use process substitution to avoid subshell issues
+  while IFS= read -r thread_json; do
     local thread_id
     local first_comment_content
 
@@ -106,9 +107,10 @@ delete_old_summary_comments() {
         echo "Successfully deleted thread $thread_id"
       else
         echo "Warning: Could not delete thread $thread_id (HTTP $http_status)"
+        echo "Response body: $(echo "$delete_response" | sed '$d')"
       fi
     fi
-  done
+  done < <(echo "$existing_threads_response" | jq -r '.value[] | select(.threadContext == null) | @json')
 }
 
 # Function to get existing threads and populate a lookup map to avoid duplicate comments
@@ -124,7 +126,8 @@ populate_existing_comments_map() {
     return
   fi
 
-  echo "$existing_threads_response" | jq -r '.value[] | select(.threadContext != null) | @json' | while IFS= read -r thread_json; do
+  # Use process substitution to avoid subshell and preserve array modifications
+  while IFS= read -r thread_json; do
     local file_path
     local line_number
     local location_key
@@ -136,7 +139,8 @@ populate_existing_comments_map() {
       location_key="${file_path}:${line_number}"
       existing_comment_locations["$location_key"]=1
     fi
-  done
+  done < <(echo "$existing_threads_response" | jq -r '.value[] | select(.threadContext != null) | @json')
+
   echo "Found comments at ${#existing_comment_locations[@]} unique locations."
 }
 
@@ -154,6 +158,7 @@ if echo "$API_RESPONSE_BODY" | jq -e . > /dev/null 2>&1; then
 
       if [ -n "$file_path" ] && [ "$file_path" != "null" ] && [ -n "$line_number" ] && [ "$line_number" != "null" ]; then
         # Create a location key for the new potential comment to check for duplicates
+        # Note: file_path from API doesn't have leading slash, but stored paths do
         new_comment_location_key="/${file_path}:${line_number}"
 
         if [[ -v existing_comment_locations["$new_comment_location_key"] ]]; then
@@ -383,4 +388,51 @@ else
   echo "Error posting summary comment to pull request. HTTP Status: $HTTP_STATUS"
   echo "Response: $RESPONSE_BODY"
   exit 1
+fi
+
+# 6. POST PR STATUS TO BLOCK/UNBLOCK MERGE BASED ON CRITICAL/HIGH ISSUES
+echo "Posting PR status..."
+
+# Determine status based on critical/high issues
+CRITICAL_ISSUES=$(echo "$API_RESPONSE_BODY" | jq -r '.summary.critical // 0')
+HIGH_ISSUES=$(echo "$API_RESPONSE_BODY" | jq -r '.summary.high // 0')
+
+if [ "$CRITICAL_ISSUES" -gt 0 ] || [ "$HIGH_ISSUES" -gt 0 ]; then
+  PR_STATUS="failed"
+  PR_DESCRIPTION="Found $CRITICAL_ISSUES critical and $HIGH_ISSUES high severity issues that must be addressed"
+else
+  PR_STATUS="succeeded"
+  PR_DESCRIPTION="No critical or high severity issues found"
+fi
+
+# Azure DevOps PR Status API
+PR_STATUS_URL="${SYSTEM_TEAMFOUNDATIONCOLLECTIONURI}${SYSTEM_TEAMPROJECT}/_apis/git/repositories/${BUILD_REPOSITORY_ID}/pullRequests/${SYSTEM_PULLREQUEST_PULLREQUESTID}/statuses?api-version=6.0"
+
+PR_STATUS_PAYLOAD=$(jq -n \
+  --arg state "$PR_STATUS" \
+  --arg description "$PR_DESCRIPTION" \
+  --arg context "Code Review" \
+  --arg genre "continuous-integration" \
+  '{
+    "state": $state,
+    "description": $description,
+    "context": {
+      "name": $context,
+      "genre": $genre
+    }
+  }')
+
+PR_STATUS_RESPONSE=$(curl -s -X POST "$PR_STATUS_URL" \
+  -H "Authorization: Bearer $ADO_PERSONAL_ACCESS_TOKEN" \
+  -H "Content-Type: application/json" \
+  --data "$PR_STATUS_PAYLOAD" -w "\n%{http_code}")
+
+PR_STATUS_HTTP_CODE=$(echo "$PR_STATUS_RESPONSE" | tail -n1)
+PR_STATUS_BODY=$(echo "$PR_STATUS_RESPONSE" | sed '$d')
+
+if [ "$PR_STATUS_HTTP_CODE" -ge 200 ] && [ "$PR_STATUS_HTTP_CODE" -lt 300 ]; then
+  echo "Successfully posted PR status: $PR_STATUS"
+else
+  echo "Warning: Could not post PR status. HTTP Status: $PR_STATUS_HTTP_CODE"
+  echo "Response: $PR_STATUS_BODY"
 fi
