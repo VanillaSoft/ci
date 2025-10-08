@@ -66,16 +66,16 @@ post_thread() {
   fi
 }
 
-# Function to resolve old bot summary comments
-resolve_old_summary_comments() {
-  echo "Resolving old bot summary comments..."
+# Function to delete old bot summary comments
+delete_old_summary_comments() {
+  echo "Deleting old bot summary comments..."
   local existing_threads_response
   existing_threads_response=$(curl -s -X GET "$ADO_API_URL" \
     -H "Authorization: Bearer $ADO_PERSONAL_ACCESS_TOKEN" \
     -H "Content-Type: application/json")
 
   if ! echo "$existing_threads_response" | jq -e . > /dev/null 2>&1; then
-    echo "Warning: Could not fetch existing threads to resolve old summaries."
+    echo "Warning: Could not fetch existing threads to delete old summaries."
     return
   fi
 
@@ -89,27 +89,23 @@ resolve_old_summary_comments() {
 
     # Check if this is our bot's summary comment
     if echo "$first_comment_content" | grep -q "Automated Code Review Results"; then
-      echo "Resolving old summary comment (thread ID: $thread_id)..."
+      echo "Deleting old summary comment (thread ID: $thread_id)..."
 
-      # Update thread status to "closed" (status: 4 in ADO)
-      local update_payload
-      update_payload=$(jq -n '{"status": 4}')
+      local delete_response
+      local thread_delete_url="${SYSTEM_TEAMFOUNDATIONCOLLECTIONURI}${SYSTEM_TEAMPROJECT}/_apis/git/repositories/${BUILD_REPOSITORY_ID}/pullRequests/${SYSTEM_PULLREQUEST_PULLREQUESTID}/threads/${thread_id}?api-version=6.0"
 
-      local update_response
-      local thread_update_url="${SYSTEM_TEAMFOUNDATIONCOLLECTIONURI}${SYSTEM_TEAMPROJECT}/_apis/git/repositories/${BUILD_REPOSITORY_ID}/pullRequests/${SYSTEM_PULLREQUEST_PULLREQUESTID}/threads/${thread_id}?api-version=6.0"
-
-      update_response=$(curl -s -X PATCH "$thread_update_url" \
+      delete_response=$(curl -s -X DELETE "$thread_delete_url" \
         -H "Authorization: Bearer $ADO_PERSONAL_ACCESS_TOKEN" \
         -H "Content-Type: application/json" \
-        --data "$update_payload" -w "\n%{http_code}")
+        -w "\n%{http_code}")
 
       local http_status
-      http_status=$(echo "$update_response" | tail -n1)
+      http_status=$(echo "$delete_response" | tail -n1)
 
       if [ "$http_status" -ge 200 ] && [ "$http_status" -lt 300 ]; then
-        echo "Successfully resolved thread $thread_id"
+        echo "Successfully deleted thread $thread_id"
       else
-        echo "Warning: Could not resolve thread $thread_id (HTTP $http_status)"
+        echo "Warning: Could not delete thread $thread_id (HTTP $http_status)"
       fi
     fi
   done
@@ -378,10 +374,10 @@ else
   fi
 fi
 
-# 5. RESOLVE OLD SUMMARY COMMENTS AND POST NEW ONE TO AZURE DEVOPS
+# 5. DELETE OLD SUMMARY COMMENTS AND POST NEW ONE TO AZURE DEVOPS
 
-# First, resolve old summary comments to reduce clutter
-resolve_old_summary_comments
+# First, delete old summary comments to reduce clutter
+delete_old_summary_comments
 
 echo "--- Final Summary Comment Content ---"
 cat "$COMMENT_FILE"
