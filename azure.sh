@@ -205,7 +205,7 @@ if echo "$API_RESPONSE_BODY" | jq -e . > /dev/null 2>&1; then
         inline_comment_content=$(printf "%s **%s (%s %s):**\n\n%s" "$emoji" "$severity" "$category_emoji" "$formatted_category" "$message")
         if [ -n "$suggested_fix" ] && [ "$suggested_fix" != "null" ] && [ "$suggested_fix" != "" ]; then
           sanitized_fix=$(echo "$suggested_fix" | sed -E 's/^```[a-zA-Z]*n?//g' | sed 's/```$//g')
-          suggestion=$(printf "\n\n**💡 Suggested Fix:**\n\`\`\`\n%s\n\`\`\`" "$sanitized_fix")
+          suggestion=$(printf "\n\n---\n\n**💡 Suggested Fix:**\n\n%s" "$sanitized_fix")
           inline_comment_content+="$suggestion"
         fi
 
