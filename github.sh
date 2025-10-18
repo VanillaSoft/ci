@@ -1,4 +1,5 @@
 #!/bin/bash
+set -euo pipefail
 # This script triggers the review API, parses the JSON response,
 # formats a comment for GitHub, and posts it to the pull request.
 
@@ -85,7 +86,9 @@ post_review_comment() {
 delete_old_summary_comments() {
   echo "Deleting old bot summary comments..."
   local existing_comments_response
-  existing_comments_response=$(curl -s -X GET "${GITHUB_API_URL}/comments" \
+  local issue_comments_url="https://api.github.com/repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments"
+
+  existing_comments_response=$(curl -s -X GET "$issue_comments_url" \
     -H "Authorization: token $GITHUB_TOKEN" \
     -H "Accept: application/vnd.github.v3+json")
 
@@ -99,7 +102,7 @@ delete_old_summary_comments() {
     echo "Deleting old summary comment (ID: $comment_id)..."
 
     local delete_response
-    delete_response=$(curl -s -X DELETE "${GITHUB_API_URL}/comments/${comment_id}" \
+    delete_response=$(curl -s -X DELETE "https://api.github.com/repos/${GITHUB_REPOSITORY}/issues/comments/${comment_id}" \
       -H "Authorization: token $GITHUB_TOKEN" \
       -H "Accept: application/vnd.github.v3+json" \
       -w "\n%{http_code}")
@@ -338,10 +341,12 @@ cat "$COMMENT_FILE"
 echo "---------------------------"
 
 # GitHub API requires the body in the comment payload
+# Use issue comments endpoint for summary (not review comments endpoint)
 COMMENT_BODY=$(cat "$COMMENT_FILE")
 JSON_PAYLOAD=$(jq -n --arg body "$COMMENT_BODY" '{body: $body}')
 
-POST_RESPONSE=$(curl -s -X POST "${GITHUB_API_URL}/comments" \
+ISSUE_COMMENTS_URL="https://api.github.com/repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments"
+POST_RESPONSE=$(curl -s -X POST "$ISSUE_COMMENTS_URL" \
   -H "Authorization: token $GITHUB_TOKEN" \
   -H "Accept: application/vnd.github.v3+json" \
   -H "Content-Type: application/json" \
@@ -373,7 +378,8 @@ else
 fi
 
 # GitHub Commit Status API
-COMMIT_STATUS_URL="https://api.github.com/repos/${GITHUB_REPOSITORY}/statuses/${GITHUB_SHA}"
+# Use the actual commit hash, not the temporary merge commit
+COMMIT_STATUS_URL="https://api.github.com/repos/${GITHUB_REPOSITORY}/statuses/${COMMIT_HASH}"
 
 STATUS_PAYLOAD=$(jq -n \
   --arg state "$COMMIT_STATUS" \
