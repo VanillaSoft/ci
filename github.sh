@@ -229,7 +229,7 @@ if echo "$API_RESPONSE_BODY" | jq -e . > /dev/null 2>&1; then
 
         inline_comment_content=$(printf "%s **%s (%s %s):**\n\n%s" "$emoji" "$severity" "$category_emoji" "$formatted_category" "$message")
         if [ -n "$suggested_fix" ] && [ "$suggested_fix" != "null" ] && [ "$suggested_fix" != "" ]; then
-          sanitized_fix=$(echo "$suggested_fix" | sed -E 's/^```[a-zA-Z]*n?//g' | sed 's/```$//g')
+          sanitized_fix=$(echo "$suggested_fix" | sed -E 's/^```[a-zA-Z]*//' | sed 's/```$//g')
           suggestion=$(printf "\n\n---\n\n**💡 Suggested Fix:**\n\n%s" "$sanitized_fix")
           inline_comment_content+="$suggestion"
         fi
@@ -237,7 +237,7 @@ if echo "$API_RESPONSE_BODY" | jq -e . > /dev/null 2>&1; then
         # Add AI-assist YAML block to inline comment
         ai_assist_block=$(printf "\n\n---\n\n**🤖 AI-Assisted Fix (copy this):**\n\`\`\`yaml\n- file: %s\n  line: %s\n  severity: %s\n  category: %s\n  message: |\n    %s" "$file_path" "$line_number" "$severity" "$category" "$message")
         if [ -n "$suggested_fix" ] && [ "$suggested_fix" != "null" ] && [ "$suggested_fix" != "" ]; then
-          sanitized_fix=$(echo "$suggested_fix" | sed -E 's/^```[a-zA-Z]*n?//g' | sed 's/```$//g')
+          sanitized_fix=$(echo "$suggested_fix" | sed -E 's/^```[a-zA-Z]*//' | sed 's/```$//g')
           ai_assist_block+=$(printf "\n  suggested_fix: |\n%s" "$(echo "$sanitized_fix" | sed 's/^/    /')")
         fi
         ai_assist_block+=$(printf "\n\`\`\`")
@@ -350,7 +350,7 @@ else
         echo "" >> "$COMMENT_FILE"
 
         if [ -n "$suggested_fix" ] && [ "$suggested_fix" != "null" ] && [ "$suggested_fix" != "" ]; then
-          sanitized_fix=$(echo "$suggested_fix" | sed -E 's/^```[a-zA-Z]*n?//g' | sed 's/```$//g')
+          sanitized_fix=$(echo "$suggested_fix" | sed -E 's/^```[a-zA-Z]*//' | sed 's/```$//g')
 
           echo "**💡 Suggested Fix:**" >> "$COMMENT_FILE"
           echo '```' >> "$COMMENT_FILE"
