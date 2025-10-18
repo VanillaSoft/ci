@@ -1,4 +1,5 @@
-#!/bin/bash
+#!/usr/bin/env bash
+# Requires bash 4.0+ for associative arrays
 set -euo pipefail
 # This script triggers the review API, parses the JSON response,
 # formats a comment for GitHub, and posts it to the pull request.
@@ -82,15 +83,48 @@ post_review_comment() {
   fi
 }
 
+# Function to fetch all pages of comments using pagination
+fetch_all_comments() {
+  local url="$1"
+  local all_comments="[]"
+  local page_url="$url?per_page=100"
+
+  while [ -n "$page_url" ]; do
+    local response
+    local headers_file
+    headers_file=$(mktemp)
+
+    # Fetch page with headers to get Link header for pagination
+    response=$(curl -s -X GET "$page_url" \
+      -H "Authorization: token $GITHUB_TOKEN" \
+      -H "Accept: application/vnd.github.v3+json" \
+      -D "$headers_file")
+
+    if ! echo "$response" | jq -e . > /dev/null 2>&1; then
+      rm -f "$headers_file"
+      echo "[]"
+      return
+    fi
+
+    # Merge this page with all_comments
+    all_comments=$(jq -s '.[0] + .[1]' <(echo "$all_comments") <(echo "$response"))
+
+    # Extract next page URL from Link header
+    page_url=$(grep -i "^link:" "$headers_file" | sed -n 's/.*<\([^>]*\)>; rel="next".*/\1/p')
+
+    rm -f "$headers_file"
+  done
+
+  echo "$all_comments"
+}
+
 # Function to delete old bot summary comments
 delete_old_summary_comments() {
   echo "Deleting old bot summary comments..."
   local existing_comments_response
   local issue_comments_url="https://api.github.com/repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments"
 
-  existing_comments_response=$(curl -s -X GET "$issue_comments_url" \
-    -H "Authorization: token $GITHUB_TOKEN" \
-    -H "Accept: application/vnd.github.v3+json")
+  existing_comments_response=$(fetch_all_comments "$issue_comments_url")
 
   if ! echo "$existing_comments_response" | jq -e . > /dev/null 2>&1; then
     echo "Warning: Could not fetch existing comments to delete old summaries."
@@ -122,9 +156,7 @@ delete_old_summary_comments() {
 populate_existing_comments_map() {
   echo "Fetching existing review comments to prevent duplicates..."
   local existing_comments_response
-  existing_comments_response=$(curl -s -X GET "${GITHUB_API_URL}/comments" \
-    -H "Authorization: token $GITHUB_TOKEN" \
-    -H "Accept: application/vnd.github.v3+json")
+  existing_comments_response=$(fetch_all_comments "${GITHUB_API_URL}/comments")
 
   if ! echo "$existing_comments_response" | jq -e . > /dev/null 2>&1; then
     echo "Warning: Could not fetch or parse existing comments. Duplicate checking will be skipped."
