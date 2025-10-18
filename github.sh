@@ -13,13 +13,15 @@
 PR_NUMBER=$(jq -r '.pull_request.number' "$GITHUB_EVENT_PATH")
 BASE_BRANCH=$(jq -r '.pull_request.base.ref' "$GITHUB_EVENT_PATH")
 SOURCE_BRANCH=$(jq -r '.pull_request.head.ref' "$GITHUB_EVENT_PATH")
+# Use the actual HEAD commit from the PR, not the merge commit
+COMMIT_HASH=$(jq -r '.pull_request.head.sha' "$GITHUB_EVENT_PATH")
 REPO_URL="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}.git"
 
 # 1. TRIGGER THE EXTERNAL REVIEW API
-echo "Triggering code review for commit $GITHUB_SHA..."
+echo "Triggering code review for commit $COMMIT_HASH..."
 API_PAYLOAD=$(jq -n \
   --arg repo_url "$REPO_URL" \
-  --arg commit_hash "$GITHUB_SHA" \
+  --arg commit_hash "$COMMIT_HASH" \
   --arg base_branch "$BASE_BRANCH" \
   --arg source_branch "$SOURCE_BRANCH" \
   --arg ticket_system "github" \
@@ -52,7 +54,7 @@ post_review_comment() {
   local comment_payload
   comment_payload=$(jq -n \
     --arg body "$comment_body" \
-    --arg commit_id "$GITHUB_SHA" \
+    --arg commit_id "$COMMIT_HASH" \
     --arg path "$file_path" \
     --argjson line "$line_number" \
     '{
@@ -240,7 +242,7 @@ else
         category=$(echo "$praise_json" | jq -r '.category')
 
         # GitHub link format
-        file_link="[$file_path:$line_number](${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/blob/${GITHUB_SHA}/${file_path}#L${line_number})"
+        file_link="[$file_path:$line_number](${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/blob/${COMMIT_HASH}/${file_path}#L${line_number})"
         formatted_category=$(echo "$category" | sed -e 's/_/ /g' -e 's/\b\(.\)/\u\1/g')
 
         echo "- ✅ **$formatted_category** in $file_link" >> "$COMMENT_FILE"
@@ -304,7 +306,7 @@ else
         esac
 
         # GitHub link format
-        file_link="[$file_path:$line_number](${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/blob/${GITHUB_SHA}/${file_path}#L${line_number})"
+        file_link="[$file_path:$line_number](${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/blob/${COMMIT_HASH}/${file_path}#L${line_number})"
         formatted_category=$(echo "$category" | sed -e 's/_/ /g' -e 's/\b\(.\)/\u\1/g')
 
         echo "- $emoji **$severity** in $file_link ($category_emoji $formatted_category)" >> "$COMMENT_FILE"
