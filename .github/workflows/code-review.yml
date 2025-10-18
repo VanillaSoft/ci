@@ -1,0 +1,51 @@
+name: Automated Code Review
+
+on:
+  pull_request:
+    types: [ opened, synchronize, reopened ]
+
+jobs:
+  code-review:
+    runs-on: ubuntu-latest
+
+    permissions:
+      pull-requests: write
+      statuses: write
+      contents: read
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Debug environment variables
+        run: |
+          echo "GITHUB_EVENT_PATH: $GITHUB_EVENT_PATH"
+          echo "GITHUB_SERVER_URL: $GITHUB_SERVER_URL"
+          echo "GITHUB_REPOSITORY: $GITHUB_REPOSITORY"
+          echo "---"
+          PR_NUMBER=$(jq -r '.pull_request.number' "$GITHUB_EVENT_PATH")
+          BASE_BRANCH=$(jq -r '.pull_request.base.ref' "$GITHUB_EVENT_PATH")
+          SOURCE_BRANCH=$(jq -r '.pull_request.head.ref' "$GITHUB_EVENT_PATH")
+          REPO_URL="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}.git"
+          echo "PR_NUMBER: $PR_NUMBER"
+          echo "BASE_BRANCH: $BASE_BRANCH"
+          echo "SOURCE_BRANCH: $SOURCE_BRANCH"
+          echo "REPO_URL: $REPO_URL"
+
+      - name: Run automated code review
+        env:
+          VCS_TOKEN: ${{ secrets.VCS_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REVIEW_API_URL: ${{ secrets.REVIEW_API_URL }}
+          REVIEW_API_KEY: ${{ secrets.REVIEW_API_KEY }}
+        run: |
+          echo "--- Verifying environment variables ---"
+          echo "GITHUB_TOKEN is set: ${GITHUB_TOKEN:+true}"
+          echo "VCS_TOKEN is set: ${VCS_TOKEN:+true}"
+          echo "REVIEW_API_URL is set: ${REVIEW_API_URL:+true}"
+          echo "REVIEW_API_KEY is set: ${REVIEW_API_KEY:+true}"
+          echo "------------------------------------"
+          chmod +x github.sh
+          ./github.sh
