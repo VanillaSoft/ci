@@ -67,6 +67,10 @@ post_review_comment() {
   local http_status
   local response_body
 
+  echo "[DEBUG] Attempting to post comment to ${file_path}:${line_number}"
+  echo "[DEBUG] Using commit_id: $COMMIT_HASH"
+  echo "[DEBUG] API URL: ${GITHUB_API_URL}/comments"
+
   local comment_payload
   comment_payload=$(jq -n \
     --arg body "$comment_body" \
@@ -80,6 +84,8 @@ post_review_comment() {
       line: $line
     }')
 
+  echo "[DEBUG] Payload: $comment_payload"
+
   post_response=$(curl -s -X POST "${GITHUB_API_URL}/comments" \
     -H "Authorization: token $GITHUB_TOKEN" \
     -H "Accept: application/vnd.github.v3+json" \
@@ -89,11 +95,15 @@ post_review_comment() {
   http_status=$(echo "$post_response" | tail -n1)
   response_body=$(echo "$post_response" | sed '$d')
 
+  echo "[DEBUG] HTTP Status: $http_status"
+  echo "[DEBUG] Response: $response_body"
+
   if [ "$http_status" -ge 200 ] && [ "$http_status" -lt 300 ]; then
     echo "Successfully posted an inline comment on ${file_path}:${line_number}."
   else
     echo "Error posting an inline comment. HTTP Status: $http_status"
     echo "Response: $response_body"
+    exit 1
   fi
 }
 
