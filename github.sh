@@ -192,7 +192,6 @@ populate_existing_comments_map() {
   echo "[DEBUG] Starting to process comments array..."
 
   while IFS= read -r comment_json; do
-    echo "[DEBUG] Processing comment: $comment_json"
     local file_path
     local line_number
     local location_key
@@ -200,11 +199,15 @@ populate_existing_comments_map() {
     file_path=$(echo "$comment_json" | jq -r '.path // empty')
     line_number=$(echo "$comment_json" | jq -r '.line // empty')
 
+    echo "[DEBUG] Checking comment - path: '$file_path', line: '$line_number'"
+
     if [ -n "$file_path" ] && [ "$file_path" != "null" ] && [ -n "$line_number" ] && [ "$line_number" != "null" ]; then
       location_key="${file_path}:${line_number}"
       existing_comment_locations["$location_key"]=1
       ((comment_count++))
       echo "[DEBUG] Added comment location: $location_key"
+    else
+      echo "[DEBUG] Skipping comment - path or line is null/empty"
     fi
   done < <(echo "$existing_comments_response" | jq -c '.[]' || true)
 
