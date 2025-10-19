@@ -206,15 +206,15 @@ populate_existing_comments_map() {
     local line_number
     local location_key
 
-    file_path=$(echo "$comment_json" | jq -r '.path // empty')
-    line_number=$(echo "$comment_json" | jq -r '.line // empty')
+    file_path=$(echo "$comment_json" | jq -r '.path // empty') || true
+    line_number=$(echo "$comment_json" | jq -r '.line // empty') || true
 
     echo "[DEBUG] Checking comment - path: '$file_path', line: '$line_number'"
 
-    if [ -n "$file_path" ] && [ "$file_path" != "null" ] && [ -n "$line_number" ] && [ "$line_number" != "null" ]; then
+    if [ -n "$file_path" ] && [ "$file_path" != "null" ] && [ "$file_path" != "" ] && [ -n "$line_number" ] && [ "$line_number" != "null" ] && [ "$line_number" != "" ]; then
       location_key="${file_path}:${line_number}"
       existing_comment_locations["$location_key"]=1
-      ((comment_count++))
+      ((comment_count++)) || true
       echo "[DEBUG] Added comment location: $location_key"
     else
       echo "[DEBUG] Skipping comment - path or line is null/empty"
