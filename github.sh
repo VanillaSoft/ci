@@ -67,10 +67,6 @@ post_review_comment() {
   local http_status
   local response_body
 
-  echo "[DEBUG] Attempting to post comment to ${file_path}:${line_number}"
-  echo "[DEBUG] Using commit_id: $COMMIT_HASH"
-  echo "[DEBUG] API URL: ${GITHUB_API_URL}/comments"
-
   local comment_payload
   comment_payload=$(jq -n \
     --arg body "$comment_body" \
@@ -84,8 +80,6 @@ post_review_comment() {
       line: $line
     }')
 
-  echo "[DEBUG] Payload: $comment_payload"
-
   post_response=$(curl -s -X POST "${GITHUB_API_URL}/comments" \
     -H "Authorization: token $GITHUB_TOKEN" \
     -H "Accept: application/vnd.github.v3+json" \
@@ -94,9 +88,6 @@ post_review_comment() {
 
   http_status=$(echo "$post_response" | tail -n1)
   response_body=$(echo "$post_response" | sed '$d')
-
-  echo "[DEBUG] HTTP Status: $http_status"
-  echo "[DEBUG] Response: $response_body"
 
   if [ "$http_status" -ge 200 ] && [ "$http_status" -lt 300 ]; then
     echo "Successfully posted an inline comment on ${file_path}:${line_number}."
@@ -179,28 +170,16 @@ delete_old_summary_comments() {
 # Function to get existing review comments and populate a lookup map to avoid duplicate comments
 populate_existing_comments_map() {
   echo "Fetching existing review comments to prevent duplicates..."
-  echo "[DEBUG] GITHUB_API_URL=${GITHUB_API_URL}"
-  echo "[DEBUG] Fetching from: ${GITHUB_API_URL}/comments"
-
   local existing_comments_response
   existing_comments_response=$(fetch_all_comments "${GITHUB_API_URL}/comments")
 
-  echo "[DEBUG] fetch_all_comments returned, exit code: $?"
-  echo "[DEBUG] Response length: ${#existing_comments_response}"
-  echo "[DEBUG] Response content: $existing_comments_response"
-
   if ! echo "$existing_comments_response" | jq -e . > /dev/null 2>&1; then
     echo "Warning: Could not fetch or parse existing comments. Duplicate checking will be skipped."
-    echo "[DEBUG] jq validation failed"
     return
   fi
 
-  echo "[DEBUG] jq validation passed"
-
   # Extract file path and line number from existing comments
   local comment_count=0
-  echo "[DEBUG] Starting to process comments array..."
-
   while IFS= read -r comment_json; do
     local file_path
     local line_number
@@ -209,19 +188,13 @@ populate_existing_comments_map() {
     file_path=$(echo "$comment_json" | jq -r '.path // empty') || true
     line_number=$(echo "$comment_json" | jq -r '.line // empty') || true
 
-    echo "[DEBUG] Checking comment - path: '$file_path', line: '$line_number'"
-
     if [ -n "$file_path" ] && [ "$file_path" != "null" ] && [ "$file_path" != "" ] && [ -n "$line_number" ] && [ "$line_number" != "null" ] && [ "$line_number" != "" ]; then
       location_key="${file_path}:${line_number}"
       existing_comment_locations["$location_key"]=1
       ((comment_count++)) || true
-      echo "[DEBUG] Added comment location: $location_key"
-    else
-      echo "[DEBUG] Skipping comment - path or line is null/empty"
     fi
   done < <(echo "$existing_comments_response" | jq -c '.[]' || true)
 
-  echo "[DEBUG] Finished processing comments"
   echo "Found comments at ${comment_count} unique locations."
 }
 
