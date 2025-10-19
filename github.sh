@@ -178,6 +178,7 @@ populate_existing_comments_map() {
   fi
 
   # Extract file path and line number from existing comments
+  local comment_count=0
   while IFS= read -r comment_json; do
     local file_path
     local line_number
@@ -189,10 +190,11 @@ populate_existing_comments_map() {
     if [ -n "$file_path" ] && [ "$file_path" != "null" ] && [ -n "$line_number" ] && [ "$line_number" != "null" ]; then
       location_key="${file_path}:${line_number}"
       existing_comment_locations["$location_key"]=1
+      ((comment_count++))
     fi
   done < <(echo "$existing_comments_response" | jq -c '.[]')
 
-  echo "Found comments at ${#existing_comment_locations[@]} unique locations."
+  echo "Found comments at ${comment_count} unique locations."
 }
 
 if echo "$API_RESPONSE_BODY" | jq -e . > /dev/null 2>&1; then
