@@ -19,36 +19,13 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Debug environment variables
-        run: |
-          echo "GITHUB_EVENT_PATH: $GITHUB_EVENT_PATH"
-          echo "GITHUB_SERVER_URL: $GITHUB_SERVER_URL"
-          echo "GITHUB_REPOSITORY: $GITHUB_REPOSITORY"
-          echo "---"
-          PR_NUMBER=$(jq -r '.pull_request.number' "$GITHUB_EVENT_PATH")
-          BASE_BRANCH=$(jq -r '.pull_request.base.ref' "$GITHUB_EVENT_PATH")
-          SOURCE_BRANCH=$(jq -r '.pull_request.head.ref' "$GITHUB_EVENT_PATH")
-          REPO_URL="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}.git"
-          echo "PR_NUMBER: $PR_NUMBER"
-          echo "BASE_BRANCH: $BASE_BRANCH"
-          echo "SOURCE_BRANCH: $SOURCE_BRANCH"
-          echo "REPO_URL: $REPO_URL"
-
       - name: Run automated code review
-        env:
-          # Use GITHUB_TOKEN for both VCS access and GitHub API operations
-          # GITHUB_TOKEN has 'contents: read' permission to clone the repo
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          REVIEW_API_URL: ${{ secrets.REVIEW_API_URL }}
-          REVIEW_API_KEY: ${{ secrets.REVIEW_API_KEY }}
-          # Comment formatting options (optional)
-          # INCLUDE_AI_ASSIST_INLINE: "true" # Include AI-assist YAML in inline comments (default: true)
-          # INCLUDE_AI_ASSIST_SUMMARY: "false" # Include AI-assist YAML in summary comment (default: false)
-        run: |
-          echo "--- Verifying environment variables ---"
-          echo "GITHUB_TOKEN is set: ${GITHUB_TOKEN:+true}"
-          echo "REVIEW_API_URL is set: ${REVIEW_API_URL:+true}"
-          echo "REVIEW_API_KEY is set: ${REVIEW_API_KEY:+true}"
-          echo "------------------------------------"
-          chmod +x github.sh
-          ./github.sh
+        uses: vladan-me/ci@v0.1.0
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          review_api_url: ${{ secrets.REVIEW_API_URL }}
+          review_api_key: ${{ secrets.REVIEW_API_KEY }}
+          # Optional: customize comment formatting
+          # include_ai_assist_inline: 'true'
+          # include_ai_assist_summary: 'false'
+          # max_line_width: '100'

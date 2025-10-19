@@ -1,0 +1,46 @@
+name: 'Automated Code Review'
+description: 'AI-powered automated code review that posts inline comments and summary on pull requests'
+author: 'Vladan'
+
+branding:
+  icon: 'check-circle'
+  color: 'blue'
+
+inputs:
+  github_token:
+    description: 'GitHub token for API access (usually secrets.GITHUB_TOKEN)'
+    required: true
+  review_api_url:
+    description: 'Code review API endpoint URL'
+    required: true
+  review_api_key:
+    description: 'API key for authenticating with the code review service'
+    required: true
+  include_ai_assist_inline:
+    description: 'Include AI-assist YAML block in inline comments for easy copy-paste'
+    required: false
+    default: 'true'
+  include_ai_assist_summary:
+    description: 'Include AI-assist YAML block in summary comment'
+    required: false
+    default: 'false'
+  max_line_width:
+    description: 'Maximum character width for code blocks before wrapping (default: 100)'
+    required: false
+    default: '100'
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Run automated code review
+      shell: bash
+      env:
+        GITHUB_TOKEN: ${{ inputs.github_token }}
+        REVIEW_API_URL: ${{ inputs.review_api_url }}
+        REVIEW_API_KEY: ${{ inputs.review_api_key }}
+        INCLUDE_AI_ASSIST_INLINE: ${{ inputs.include_ai_assist_inline }}
+        INCLUDE_AI_ASSIST_SUMMARY: ${{ inputs.include_ai_assist_summary }}
+        MAX_LINE_WIDTH: ${{ inputs.max_line_width }}
+      run: |
+        chmod +x "${{ github.action_path }}/github.sh"
+        "${{ github.action_path }}/github.sh"
