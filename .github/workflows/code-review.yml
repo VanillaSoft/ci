@@ -38,7 +38,6 @@ jobs:
         env:
           # Use GITHUB_TOKEN for both VCS access and GitHub API operations
           # GITHUB_TOKEN has 'contents: read' permission to clone the repo
-          VCS_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REVIEW_API_URL: ${{ secrets.REVIEW_API_URL }}
           REVIEW_API_KEY: ${{ secrets.REVIEW_API_KEY }}
@@ -48,7 +47,6 @@ jobs:
         run: |
           echo "--- Verifying environment variables ---"
           echo "GITHUB_TOKEN is set: ${GITHUB_TOKEN:+true}"
-          echo "VCS_TOKEN is set: ${VCS_TOKEN:+true}"
           echo "REVIEW_API_URL is set: ${REVIEW_API_URL:+true}"
           echo "REVIEW_API_KEY is set: ${REVIEW_API_KEY:+true}"
           echo "------------------------------------"

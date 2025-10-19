@@ -15,7 +15,7 @@ set -euo pipefail
 # These can be set as environment variables in the workflow to customize comment formatting
 INCLUDE_AI_ASSIST_INLINE="${INCLUDE_AI_ASSIST_INLINE:-true}"  # Include AI-assist YAML block in inline comments
 INCLUDE_AI_ASSIST_SUMMARY="${INCLUDE_AI_ASSIST_SUMMARY:-false}"  # Include AI-assist YAML block in summary comment
-MAX_LINE_WIDTH="${MAX_LINE_WIDTH:-120}"  # Maximum character width for code blocks before wrapping
+MAX_LINE_WIDTH="${MAX_LINE_WIDTH:-100}"  # Maximum character width for code blocks before wrapping
 
 # Function to wrap long lines in code blocks
 wrap_code_block() {
@@ -41,7 +41,7 @@ API_PAYLOAD=$(jq -n \
   --arg base_branch "$BASE_BRANCH" \
   --arg source_branch "$SOURCE_BRANCH" \
   --arg ticket_system "github" \
-  --arg vcs_token "$VCS_TOKEN" \
+  --arg vcs_token "$GITHUB_TOKEN" \
   '{repo_url: $repo_url, commit_hash: $commit_hash, base_branch: $base_branch, source_branch: $source_branch, ticket_system: $ticket_system, vcs_token: $vcs_token}')
 
 API_RESPONSE_BODY=$(curl -s -X POST "$REVIEW_API_URL" \
