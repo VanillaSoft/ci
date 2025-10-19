@@ -11,6 +11,11 @@ set -euo pipefail
 # GITHUB_EVENT_PATH - Path to the event JSON file
 # GITHUB_TOKEN - GitHub token for API access (from secrets)
 
+# Comment Formatting Configuration
+# These can be set as environment variables in the workflow to customize comment formatting
+INCLUDE_AI_ASSIST_INLINE="${INCLUDE_AI_ASSIST_INLINE:-true}"  # Include AI-assist YAML block in inline comments
+INCLUDE_AI_ASSIST_SUMMARY="${INCLUDE_AI_ASSIST_SUMMARY:-false}"  # Include AI-assist YAML block in summary comment
+
 # Extract PR number and branch information from the GitHub event
 PR_NUMBER=$(jq -r '.pull_request.number' "$GITHUB_EVENT_PATH")
 BASE_BRANCH=$(jq -r '.pull_request.base.ref' "$GITHUB_EVENT_PATH")
@@ -230,18 +235,20 @@ if echo "$API_RESPONSE_BODY" | jq -e . > /dev/null 2>&1; then
         inline_comment_content=$(printf "%s **%s (%s %s):**\n\n%s" "$emoji" "$severity" "$category_emoji" "$formatted_category" "$message")
         if [ -n "$suggested_fix" ] && [ "$suggested_fix" != "null" ] && [ "$suggested_fix" != "" ]; then
           sanitized_fix=$(echo "$suggested_fix" | sed -E 's/^```[a-zA-Z]*//' | sed 's/```$//g')
-          suggestion=$(printf "\n\n---\n\n**💡 Suggested Fix:**\n\n%s" "$sanitized_fix")
+          suggestion=$(printf "\n\n---\n\n**💡 Suggested Fix:**\n\n\`\`\`\n%s\n\`\`\`" "$sanitized_fix")
           inline_comment_content+="$suggestion"
         fi
 
-        # Add AI-assist YAML block to inline comment
-        ai_assist_block=$(printf "\n\n---\n\n**🤖 AI-Assisted Fix (copy this):**\n\`\`\`yaml\n- file: %s\n  line: %s\n  severity: %s\n  category: %s\n  message: |\n    %s" "$file_path" "$line_number" "$severity" "$category" "$message")
-        if [ -n "$suggested_fix" ] && [ "$suggested_fix" != "null" ] && [ "$suggested_fix" != "" ]; then
-          sanitized_fix=$(echo "$suggested_fix" | sed -E 's/^```[a-zA-Z]*//' | sed 's/```$//g')
-          ai_assist_block+=$(printf "\n  suggested_fix: |\n%s" "$(echo "$sanitized_fix" | sed 's/^/    /')")
+        # Add AI-assist YAML block to inline comment (if enabled)
+        if [ "$INCLUDE_AI_ASSIST_INLINE" = "true" ]; then
+          ai_assist_block=$(printf "\n\n---\n\n**🤖 AI-Assisted Fix (copy this):**\n\`\`\`yaml\n- file: %s\n  line: %s\n  severity: %s\n  category: %s\n  message: |\n%s" "$file_path" "$line_number" "$severity" "$category" "$(printf "%s\n" "$message" | sed 's/^/    /')")
+          if [ -n "$suggested_fix" ] && [ "$suggested_fix" != "null" ] && [ "$suggested_fix" != "" ]; then
+            sanitized_fix=$(echo "$suggested_fix" | sed -E 's/^```[a-zA-Z]*//' | sed 's/```$//g')
+            ai_assist_block+=$(printf "\n  suggested_fix: |\n%s" "$(printf "%s\n" "$sanitized_fix" | sed 's/^/    /')")
+          fi
+          ai_assist_block+=$(printf "\n\`\`\`")
+          inline_comment_content+="$ai_assist_block"
         fi
-        ai_assist_block+=$(printf "\n\`\`\`")
-        inline_comment_content+="$ai_assist_block"
 
         post_review_comment "$file_path" "$line_number" "$inline_comment_content"
       fi
@@ -346,7 +353,7 @@ else
 
         echo "- $emoji **$severity** in $file_link ($category_emoji $formatted_category)" >> "$COMMENT_FILE"
         echo "" >> "$COMMENT_FILE"
-        echo "$message" >> "$COMMENT_FILE"
+        printf "%s\n" "$message" >> "$COMMENT_FILE"
         echo "" >> "$COMMENT_FILE"
 
         if [ -n "$suggested_fix" ] && [ "$suggested_fix" != "null" ] && [ "$suggested_fix" != "" ]; then
@@ -354,9 +361,29 @@ else
 
           echo "**💡 Suggested Fix:**" >> "$COMMENT_FILE"
           echo '```' >> "$COMMENT_FILE"
-          echo "$sanitized_fix" >> "$COMMENT_FILE"
+          printf "%s\n" "$sanitized_fix" >> "$COMMENT_FILE"
           echo '```' >> "$COMMENT_FILE"
         fi
+
+        # Add AI-assist YAML block to summary comment (if enabled)
+        if [ "$INCLUDE_AI_ASSIST_SUMMARY" = "true" ]; then
+          echo "" >> "$COMMENT_FILE"
+          echo "**🤖 AI-Assisted Fix (copy this):**" >> "$COMMENT_FILE"
+          echo '```yaml' >> "$COMMENT_FILE"
+          echo "- file: $file_path" >> "$COMMENT_FILE"
+          echo "  line: $line_number" >> "$COMMENT_FILE"
+          echo "  severity: $severity" >> "$COMMENT_FILE"
+          echo "  category: $category" >> "$COMMENT_FILE"
+          echo "  message: |" >> "$COMMENT_FILE"
+          printf "%s\n" "$message" | sed 's/^/    /' >> "$COMMENT_FILE"
+          if [ -n "$suggested_fix" ] && [ "$suggested_fix" != "null" ] && [ "$suggested_fix" != "" ]; then
+            sanitized_fix=$(echo "$suggested_fix" | sed -E 's/^```[a-zA-Z]*//' | sed 's/```$//g')
+            echo "  suggested_fix: |" >> "$COMMENT_FILE"
+            printf "%s\n" "$sanitized_fix" | sed 's/^/    /' >> "$COMMENT_FILE"
+          fi
+          echo '```' >> "$COMMENT_FILE"
+        fi
+
         echo "" >> "$COMMENT_FILE"
       done
     fi

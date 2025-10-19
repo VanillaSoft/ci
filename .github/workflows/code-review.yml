@@ -36,10 +36,15 @@ jobs:
 
       - name: Run automated code review
         env:
-          VCS_TOKEN: ${{ secrets.VCS_TOKEN }}
+          # Use GITHUB_TOKEN for both VCS access and GitHub API operations
+          # GITHUB_TOKEN has 'contents: read' permission to clone the repo
+          VCS_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REVIEW_API_URL: ${{ secrets.REVIEW_API_URL }}
           REVIEW_API_KEY: ${{ secrets.REVIEW_API_KEY }}
+          # Comment formatting options (optional)
+          # INCLUDE_AI_ASSIST_INLINE: "true" # Include AI-assist YAML in inline comments (default: true)
+          # INCLUDE_AI_ASSIST_SUMMARY: "false" # Include AI-assist YAML in summary comment (default: false)
         run: |
           echo "--- Verifying environment variables ---"
           echo "GITHUB_TOKEN is set: ${GITHUB_TOKEN:+true}"
