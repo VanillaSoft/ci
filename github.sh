@@ -94,6 +94,7 @@ post_review_comment() {
   else
     echo "Error posting an inline comment. HTTP Status: $http_status"
     echo "Response: $response_body"
+    exit 1
   fi
 }
 
@@ -178,21 +179,23 @@ populate_existing_comments_map() {
   fi
 
   # Extract file path and line number from existing comments
+  local comment_count=0
   while IFS= read -r comment_json; do
     local file_path
     local line_number
     local location_key
 
-    file_path=$(echo "$comment_json" | jq -r '.path // empty')
-    line_number=$(echo "$comment_json" | jq -r '.line // empty')
+    file_path=$(echo "$comment_json" | jq -r '.path // empty') || true
+    line_number=$(echo "$comment_json" | jq -r '.line // empty') || true
 
-    if [ -n "$file_path" ] && [ "$file_path" != "null" ] && [ -n "$line_number" ] && [ "$line_number" != "null" ]; then
+    if [ -n "$file_path" ] && [ "$file_path" != "null" ] && [ "$file_path" != "" ] && [ -n "$line_number" ] && [ "$line_number" != "null" ] && [ "$line_number" != "" ]; then
       location_key="${file_path}:${line_number}"
       existing_comment_locations["$location_key"]=1
+      ((comment_count++)) || true
     fi
-  done < <(echo "$existing_comments_response" | jq -c '.[]')
+  done < <(echo "$existing_comments_response" | jq -c '.[]' || true)
 
-  echo "Found comments at ${#existing_comment_locations[@]} unique locations."
+  echo "Found comments at ${comment_count} unique locations."
 }
 
 if echo "$API_RESPONSE_BODY" | jq -e . > /dev/null 2>&1; then
