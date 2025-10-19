@@ -169,17 +169,30 @@ delete_old_summary_comments() {
 # Function to get existing review comments and populate a lookup map to avoid duplicate comments
 populate_existing_comments_map() {
   echo "Fetching existing review comments to prevent duplicates..."
+  echo "[DEBUG] GITHUB_API_URL=${GITHUB_API_URL}"
+  echo "[DEBUG] Fetching from: ${GITHUB_API_URL}/comments"
+
   local existing_comments_response
   existing_comments_response=$(fetch_all_comments "${GITHUB_API_URL}/comments")
 
+  echo "[DEBUG] fetch_all_comments returned, exit code: $?"
+  echo "[DEBUG] Response length: ${#existing_comments_response}"
+  echo "[DEBUG] Response content: $existing_comments_response"
+
   if ! echo "$existing_comments_response" | jq -e . > /dev/null 2>&1; then
     echo "Warning: Could not fetch or parse existing comments. Duplicate checking will be skipped."
+    echo "[DEBUG] jq validation failed"
     return
   fi
 
+  echo "[DEBUG] jq validation passed"
+
   # Extract file path and line number from existing comments
   local comment_count=0
+  echo "[DEBUG] Starting to process comments array..."
+
   while IFS= read -r comment_json; do
+    echo "[DEBUG] Processing comment: $comment_json"
     local file_path
     local line_number
     local location_key
@@ -191,9 +204,11 @@ populate_existing_comments_map() {
       location_key="${file_path}:${line_number}"
       existing_comment_locations["$location_key"]=1
       ((comment_count++))
+      echo "[DEBUG] Added comment location: $location_key"
     fi
-  done < <(echo "$existing_comments_response" | jq -c '.[]')
+  done < <(echo "$existing_comments_response" | jq -c '.[]' || true)
 
+  echo "[DEBUG] Finished processing comments"
   echo "Found comments at ${comment_count} unique locations."
 }
 
