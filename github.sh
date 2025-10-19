@@ -15,6 +15,15 @@ set -euo pipefail
 # These can be set as environment variables in the workflow to customize comment formatting
 INCLUDE_AI_ASSIST_INLINE="${INCLUDE_AI_ASSIST_INLINE:-true}"  # Include AI-assist YAML block in inline comments
 INCLUDE_AI_ASSIST_SUMMARY="${INCLUDE_AI_ASSIST_SUMMARY:-false}"  # Include AI-assist YAML block in summary comment
+MAX_LINE_WIDTH="${MAX_LINE_WIDTH:-120}"  # Maximum character width for code blocks before wrapping
+
+# Function to wrap long lines in code blocks
+wrap_code_block() {
+  local content="$1"
+  local max_width="$2"
+
+  printf "%s\n" "$content" | fold -s -w "$max_width"
+}
 
 # Extract PR number and branch information from the GitHub event
 PR_NUMBER=$(jq -r '.pull_request.number' "$GITHUB_EVENT_PATH")
@@ -233,9 +242,14 @@ if echo "$API_RESPONSE_BODY" | jq -e . > /dev/null 2>&1; then
         formatted_category=$(echo "$category" | sed -e 's/_/ /g' -e 's/\b\(.\)/\u\1/g')
 
         inline_comment_content=$(printf "%s **%s (%s %s):**\n\n%s" "$emoji" "$severity" "$category_emoji" "$formatted_category" "$message")
+
+        # Sanitize and wrap suggested_fix once if it exists (for reuse in both blocks)
         if [ -n "$suggested_fix" ] && [ "$suggested_fix" != "null" ] && [ "$suggested_fix" != "" ]; then
           sanitized_fix=$(echo "$suggested_fix" | sed -E 's/^```[a-zA-Z]*//' | sed 's/```$//g')
-          suggestion=$(printf "\n\n---\n\n**💡 Suggested Fix:**\n\n\`\`\`\n%s\n\`\`\`" "$sanitized_fix")
+          wrapped_fix=$(wrap_code_block "$sanitized_fix" "$MAX_LINE_WIDTH")
+
+          # Add human-readable suggested fix block
+          suggestion=$(printf "\n\n---\n\n**💡 Suggested Fix:**\n\n\`\`\`\n%s\n\`\`\`" "$wrapped_fix")
           inline_comment_content+="$suggestion"
         fi
 
@@ -243,7 +257,7 @@ if echo "$API_RESPONSE_BODY" | jq -e . > /dev/null 2>&1; then
         if [ "$INCLUDE_AI_ASSIST_INLINE" = "true" ]; then
           ai_assist_block=$(printf "\n\n---\n\n**🤖 AI-Assisted Fix (copy this):**\n\`\`\`yaml\n- file: %s\n  line: %s\n  severity: %s\n  category: %s\n  message: |\n%s" "$file_path" "$line_number" "$severity" "$category" "$(printf "%s\n" "$message" | sed 's/^/    /')")
           if [ -n "$suggested_fix" ] && [ "$suggested_fix" != "null" ] && [ "$suggested_fix" != "" ]; then
-            sanitized_fix=$(echo "$suggested_fix" | sed -E 's/^```[a-zA-Z]*//' | sed 's/```$//g')
+            # Use unwrapped sanitized_fix to preserve code integrity in YAML
             ai_assist_block+=$(printf "\n  suggested_fix: |\n%s" "$(printf "%s\n" "$sanitized_fix" | sed 's/^/    /')")
           fi
           ai_assist_block+=$(printf "\n\`\`\`")
@@ -356,12 +370,15 @@ else
         printf "%s\n" "$message" >> "$COMMENT_FILE"
         echo "" >> "$COMMENT_FILE"
 
+        # Sanitize and wrap suggested_fix once if it exists (for reuse in both blocks)
         if [ -n "$suggested_fix" ] && [ "$suggested_fix" != "null" ] && [ "$suggested_fix" != "" ]; then
           sanitized_fix=$(echo "$suggested_fix" | sed -E 's/^```[a-zA-Z]*//' | sed 's/```$//g')
+          wrapped_fix=$(wrap_code_block "$sanitized_fix" "$MAX_LINE_WIDTH")
 
+          # Add human-readable suggested fix block
           echo "**💡 Suggested Fix:**" >> "$COMMENT_FILE"
           echo '```' >> "$COMMENT_FILE"
-          printf "%s\n" "$sanitized_fix" >> "$COMMENT_FILE"
+          printf "%s\n" "$wrapped_fix" >> "$COMMENT_FILE"
           echo '```' >> "$COMMENT_FILE"
         fi
 
@@ -377,7 +394,7 @@ else
           echo "  message: |" >> "$COMMENT_FILE"
           printf "%s\n" "$message" | sed 's/^/    /' >> "$COMMENT_FILE"
           if [ -n "$suggested_fix" ] && [ "$suggested_fix" != "null" ] && [ "$suggested_fix" != "" ]; then
-            sanitized_fix=$(echo "$suggested_fix" | sed -E 's/^```[a-zA-Z]*//' | sed 's/```$//g')
+            # Use unwrapped sanitized_fix to preserve code integrity in YAML
             echo "  suggested_fix: |" >> "$COMMENT_FILE"
             printf "%s\n" "$sanitized_fix" | sed 's/^/    /' >> "$COMMENT_FILE"
           fi
