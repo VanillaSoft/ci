@@ -37,7 +37,209 @@ API_RESPONSE_BODY=$(curl -s -X POST "$REVIEW_API_URL" \
 # 2. DEBUG LOGGING
 echo "--- Raw API Response Received ---"; echo "$API_RESPONSE_BODY"; echo "---------------------------------"
 
-# 3. PARSE RESPONSE AND BUILD THE FORMATTED COMMENT IN A FILE
+# 3. PARSE RESPONSE AND POST INLINE COMMENTS FOR ISSUES
+ADO_API_URL="${SYSTEM_TEAMFOUNDATIONCOLLECTIONURI}${SYSTEM_TEAMPROJECT}/_apis/git/repositories/${BUILD_REPOSITORY_ID}/pullRequests/${SYSTEM_PULLREQUEST_PULLREQUESTID}/threads?api-version=7.1"
+
+# Use an associative array to store locations of existing comments
+declare -A existing_comment_locations
+
+# Function to post a comment thread
+post_thread() {
+  local payload="$1"
+  local post_response
+  local http_status
+  local response_body
+
+  post_response=$(curl -s -X POST "$ADO_API_URL" \
+    -H "Authorization: Bearer $ADO_PERSONAL_ACCESS_TOKEN" \
+    -H "Content-Type: application/json" \
+    --data "$payload" -w "\n%{http_code}")
+
+  http_status=$(echo "$post_response" | tail -n1)
+  response_body=$(echo "$post_response" | sed '$d')
+
+  if [ "$http_status" -ge 200 ] && [ "$http_status" -lt 300 ]; then
+    echo "Successfully posted an inline comment."
+  else
+    echo "Error posting an inline comment. HTTP Status: $http_status"
+    echo "Response: $response_body"
+  fi
+}
+
+# Function to delete old bot summary comments
+delete_old_summary_comments() {
+  echo "Deleting old bot summary comments..."
+  local existing_threads_response
+  existing_threads_response=$(curl -s -X GET "$ADO_API_URL" \
+    -H "Authorization: Bearer $ADO_PERSONAL_ACCESS_TOKEN" \
+    -H "Content-Type: application/json")
+
+  if ! echo "$existing_threads_response" | jq -e . > /dev/null 2>&1; then
+    echo "Warning: Could not fetch existing threads to delete old summaries."
+    return
+  fi
+
+  # Find threads that are summary comments (no threadContext) and contain our signature
+  # Use process substitution to avoid subshell issues
+  while IFS= read -r thread_json; do
+    local thread_id
+    local first_comment_content
+
+    thread_id=$(echo "$thread_json" | jq -r '.id')
+    first_comment_content=$(echo "$thread_json" | jq -r '.comments[0].content // ""')
+
+    # Check if this is our bot's summary comment
+    if echo "$first_comment_content" | grep -q "Automated Code Review Results"; then
+      # Get the comment ID (first comment in the thread)
+      local comment_id
+      comment_id=$(echo "$thread_json" | jq -r '.comments[0].id')
+
+      echo "Deleting old summary comment (thread ID: $thread_id, comment ID: $comment_id)..."
+
+      local delete_response
+      local comment_delete_url="${SYSTEM_TEAMFOUNDATIONCOLLECTIONURI}${SYSTEM_TEAMPROJECT}/_apis/git/repositories/${BUILD_REPOSITORY_ID}/pullRequests/${SYSTEM_PULLREQUEST_PULLREQUESTID}/threads/${thread_id}/comments/${comment_id}?api-version=7.1"
+
+      delete_response=$(curl -s -X DELETE "$comment_delete_url" \
+        -H "Authorization: Bearer $ADO_PERSONAL_ACCESS_TOKEN" \
+        -H "Content-Type: application/json" \
+        -w "\n%{http_code}")
+
+      local http_status
+      http_status=$(echo "$delete_response" | tail -n1)
+
+      if [ "$http_status" -ge 200 ] && [ "$http_status" -lt 300 ]; then
+        echo "Successfully deleted comment in thread $thread_id"
+      else
+        echo "Warning: Could not delete comment in thread $thread_id (HTTP $http_status)"
+        echo "Response body: $(echo "$delete_response" | sed '$d')"
+      fi
+    fi
+  done < <(echo "$existing_threads_response" | jq -r '.value[] | select(.threadContext == null) | @json')
+}
+
+# Function to get existing threads and populate a lookup map to avoid duplicate comments
+populate_existing_comments_map() {
+  echo "Fetching existing comment threads to prevent duplicates..."
+  local existing_threads_response
+  existing_threads_response=$(curl -s -X GET "$ADO_API_URL" \
+    -H "Authorization: Bearer $ADO_PERSONAL_ACCESS_TOKEN" \
+    -H "Content-Type: application/json")
+
+  if ! echo "$existing_threads_response" | jq -e . > /dev/null 2>&1; then
+    echo "Warning: Could not fetch or parse existing threads. Duplicate checking will be skipped."
+    return
+  fi
+
+  # Use process substitution to avoid subshell and preserve array modifications
+  # Only track threads that have active (non-deleted) comments
+  while IFS= read -r thread_json; do
+    local file_path
+    local line_number
+    local location_key
+    local active_comments
+
+    file_path=$(echo "$thread_json" | jq -r '.threadContext.filePath')
+    line_number=$(echo "$thread_json" | jq -r '.threadContext.rightFileStart.line')
+
+    # Count non-deleted comments in this thread
+    active_comments=$(echo "$thread_json" | jq '[.comments[] | select(.isDeleted != true)] | length')
+
+    # Only add to duplicate map if thread has active comments
+    if [ -n "$file_path" ] && [ "$file_path" != "null" ] && [ -n "$line_number" ] && [ "$line_number" != "null" ] && [ "$active_comments" -gt 0 ]; then
+      location_key="${file_path}:${line_number}"
+      existing_comment_locations["$location_key"]=1
+    fi
+  done < <(echo "$existing_threads_response" | jq -r '.value[] | select(.threadContext != null) | @json')
+
+  echo "Found comments at ${#existing_comment_locations[@]} unique locations."
+}
+
+
+if echo "$API_RESPONSE_BODY" | jq -e . > /dev/null 2>&1; then
+  TOTAL_ISSUES=$(echo "$API_RESPONSE_BODY" | jq -r '.summary.total_issues // 0')
+  if [ "$TOTAL_ISSUES" -gt 0 ]; then
+    # First, fetch all existing comments to enable duplicate checking
+    populate_existing_comments_map
+
+    echo "Posting inline comments for issues..."
+    echo "$API_RESPONSE_BODY" | jq -r '.review.issues[] | select(.severity != "low") | @json' | while IFS= read -r issue_json; do
+      file_path=$(echo "$issue_json" | jq -r '.file_path')
+      line_number=$(echo "$issue_json" | jq -r '.line_number')
+
+      if [ -n "$file_path" ] && [ "$file_path" != "null" ] && [ -n "$line_number" ] && [ "$line_number" != "null" ]; then
+        # Create a location key for the new potential comment to check for duplicates
+        # Note: file_path from API doesn't have leading slash, but stored paths do
+        new_comment_location_key="/${file_path}:${line_number}"
+
+        if [[ -v existing_comment_locations["$new_comment_location_key"] ]]; then
+          echo "Skipping comment on ${file_path}:${line_number} as a comment already exists there."
+          continue
+        fi
+
+        message=$(echo "$issue_json" | jq -r '.message')
+        severity=$(echo "$issue_json" | jq -r '.severity')
+        category=$(echo "$issue_json" | jq -r '.category')
+        suggested_fix=$(echo "$issue_json" | jq -r '.suggested_fix // ""')
+
+        emoji="⚪️"
+        case "$severity" in
+          "critical") emoji="🟣" ;;
+          "high") emoji="🔴" ;;
+          "medium") emoji="🟠" ;;
+          "low") emoji="🟡" ;;
+        esac
+
+        category_emoji="📝" # Default emoji
+        case "$category" in
+          "bug") category_emoji="🐞" ;;
+          "security") category_emoji="🛡️" ;;
+          "best_practice") category_emoji="✨" ;;
+          "dependency") category_emoji="📦" ;;
+          "performance") category_emoji="🚀" ;;
+          "rbac") category_emoji="🔑" ;;
+          "syntax") category_emoji="📝" ;;
+        esac
+
+        formatted_category=$(echo "$category" | sed -e 's/_/ /g' -e 's/\b\(.\)/\u\1/g')
+
+        inline_comment_content=$(printf "%s **%s (%s %s):**\n\n%s" "$emoji" "$severity" "$category_emoji" "$formatted_category" "$message")
+        if [ -n "$suggested_fix" ] && [ "$suggested_fix" != "null" ] && [ "$suggested_fix" != "" ]; then
+          sanitized_fix=$(echo "$suggested_fix" | sed -E 's/^```[a-zA-Z]*n?//g' | sed 's/```$//g')
+          suggestion=$(printf "\n\n---\n\n**💡 Suggested Fix:**\n\n%s" "$sanitized_fix")
+          inline_comment_content+="$suggestion"
+        fi
+
+        # Add AI-assist YAML block to inline comment
+        ai_assist_block=$(printf "\n\n---\n\n**🤖 AI-Assisted Fix (copy this):**\n\`\`\`yaml\n- file: %s\n  line: %s\n  severity: %s\n  category: %s\n  message: |\n    %s" "$file_path" "$line_number" "$severity" "$category" "$message")
+        if [ -n "$suggested_fix" ] && [ "$suggested_fix" != "null" ] && [ "$suggested_fix" != "" ]; then
+          sanitized_fix=$(echo "$suggested_fix" | sed -E 's/^```[a-zA-Z]*n?//g' | sed 's/```$//g')
+          ai_assist_block+=$(printf "\n  suggested_fix: |\n%s" "$(echo "$sanitized_fix" | sed 's/^/    /')")
+        fi
+        ai_assist_block+=$(printf "\n\`\`\`")
+        inline_comment_content+="$ai_assist_block"
+
+        inline_payload=$(jq -n \
+          --arg content "$inline_comment_content" \
+          --arg file_path "/$file_path" \
+          --argjson line_number "$line_number" \
+          '{
+            "comments": [{"parentCommentId": 0, "content": $content, "commentType": 1}],
+            "status": 1,
+            "threadContext": {
+              "filePath": $file_path,
+              "rightFileStart": {"line": $line_number, "offset": 1},
+              "rightFileEnd": {"line": $line_number, "offset": 2}
+            }
+          }')
+
+        post_thread "$inline_payload"
+      fi
+    done
+  fi
+fi
+
+
+# 4. PARSE RESPONSE AND BUILD THE FORMATTED SUMMARY COMMENT IN A FILE
 COMMENT_FILE="comment.md"
 > "$COMMENT_FILE"
 
@@ -63,10 +265,10 @@ else
         line_number=$(echo "$praise_json" | jq -r '.line_number')
         message=$(echo "$praise_json" | jq -r '.message')
         category=$(echo "$praise_json" | jq -r '.category')
-        
-        # ADO link format is different
-        safe_file_path=$(echo "$file_path" | sed 's/ /%20/g')
-        file_link="[$file_path:$line_number]($BUILD_REPOSITORY_URI?path=/$safe_file_path&version=GC$SYSTEM_PULLREQUEST_SOURCECOMMITID&line=$line_number)"
+
+        # ADO link format - URL encode the file path
+        encoded_file_path=$(printf '%s' "$file_path" | sed 's/ /%20/g')
+        file_link="[$file_path:$line_number]($BUILD_REPOSITORY_URI?path=/$encoded_file_path&version=GC$SYSTEM_PULLREQUEST_SOURCECOMMITID&line=$line_number)"
         formatted_category=$(echo "$category" | sed -e 's/_/ /g' -e 's/\b\(.\)/\u\1/g')
 
         echo "- ✅ **$formatted_category** in $file_link" >> "$COMMENT_FILE"
@@ -79,13 +281,13 @@ else
     if [ "$TOTAL_ISSUES" -gt 0 ]; then
       # ... (This section is identical to the bitbucket script)
       HIGH_ISSUES=$(echo "$API_RESPONSE_BODY" | jq -r '.summary.high // 0')
-      MEDIUM_ISSUES=$(echo "$API_RESPONSE_BODY" | jq -r '.summary.medium // 0') 
+      MEDIUM_ISSUES=$(echo "$API_RESPONSE_BODY" | jq -r '.summary.medium // 0')
       LOW_ISSUES=$(echo "$API_RESPONSE_BODY" | jq -r '.summary.low // 0')
       CRITICAL_ISSUES=$(echo "$API_RESPONSE_BODY" | jq -r '.summary.critical // 0')
-      
+
       echo "### ⚠️ Issues Found ($TOTAL_ISSUES)" >> "$COMMENT_FILE"
       echo "" >> "$COMMENT_FILE"
-      
+
       echo "| Severity | Count |" >> "$COMMENT_FILE"
       echo "| :--- | :---: |" >> "$COMMENT_FILE"
       if [ "$CRITICAL_ISSUES" -gt 0 ]; then
@@ -102,7 +304,7 @@ else
       fi
       echo "" >> "$COMMENT_FILE"
 
-      # Process each issue
+      # Process each issue for the human-readable summary
       echo "$API_RESPONSE_BODY" | jq -r '.review.issues[] | @json' | while IFS= read -r issue_json; do
         file_path=$(echo "$issue_json" | jq -r '.file_path')
         line_number=$(echo "$issue_json" | jq -r '.line_number')
@@ -110,15 +312,15 @@ else
         severity=$(echo "$issue_json" | jq -r '.severity')
         category=$(echo "$issue_json" | jq -r '.category')
         suggested_fix=$(echo "$issue_json" | jq -r '.suggested_fix // ""')
-        
+
         emoji="⚪️"
         case "$severity" in
-          "critical") emoji="🟣" ;; 
-          "high") emoji="🔴" ;; 
-          "medium") emoji="🟠" ;; 
-          "low") emoji="🟡" ;; 
+          "critical") emoji="🟣" ;;
+          "high") emoji="🔴" ;;
+          "medium") emoji="🟠" ;;
+          "low") emoji="🟡" ;;
         esac
-        
+
         category_emoji="📝" # Default emoji
         case "$category" in
           "bug") category_emoji="🐞" ;;
@@ -129,19 +331,20 @@ else
           "rbac") category_emoji="🔑" ;;
           "syntax") category_emoji="📝" ;;
         esac
-        
-        safe_file_path=$(echo "$file_path" | sed 's/ /%20/g')
-        file_link="[$file_path:$line_number]($BUILD_REPOSITORY_URI?path=/$safe_file_path&version=GC$SYSTEM_PULLREQUEST_SOURCECOMMITID&line=$line_number)"
+
+        # URL encode the file path for the link
+        encoded_file_path=$(printf '%s' "$file_path" | sed 's/ /%20/g')
+        file_link="[$file_path:$line_number]($BUILD_REPOSITORY_URI?path=/$encoded_file_path&version=GC$SYSTEM_PULLREQUEST_SOURCECOMMITID&line=$line_number)"
         formatted_category=$(echo "$category" | sed -e 's/_/ /g' -e 's/\b\(.\)/\u\1/g')
 
         echo "- $emoji **$severity** in $file_link ($category_emoji $formatted_category)" >> "$COMMENT_FILE"
         echo "" >> "$COMMENT_FILE"
         echo "$message" >> "$COMMENT_FILE"
         echo "" >> "$COMMENT_FILE"
-        
+
         if [ -n "$suggested_fix" ] && [ "$suggested_fix" != "null" ] && [ "$suggested_fix" != "" ]; then
           sanitized_fix=$(echo "$suggested_fix" | sed -E 's/^```[a-zA-Z]*n?//g' | sed 's/```$//g')
-          
+
           echo "**💡 Suggested Fix:**" >> "$COMMENT_FILE"
           echo '```' >> "$COMMENT_FILE"
           echo "$sanitized_fix" >> "$COMMENT_FILE"
@@ -153,14 +356,18 @@ else
   fi
 fi
 
-# 4. POST THE FORMATTED COMMENT TO AZURE DEVOPS
-echo "--- Final Comment Content ---"
+# 5. DELETE OLD SUMMARY COMMENTS AND POST NEW ONE TO AZURE DEVOPS
+
+# First, delete old summary comments to reduce clutter
+delete_old_summary_comments
+
+echo "--- Final Summary Comment Content ---"
 cat "$COMMENT_FILE"
 echo "---------------------------"
 
 # Azure DevOps API requires a specific JSON structure for creating a PR thread
 JSON_PAYLOAD=$(jq -n --rawfile content "$COMMENT_FILE" \
-  '{ 
+  '{
     "comments": [
       {
         "parentCommentId": 0,
@@ -171,8 +378,6 @@ JSON_PAYLOAD=$(jq -n --rawfile content "$COMMENT_FILE" \
     "status": 1
   }')
 
-ADO_API_URL="${SYSTEM_TEAMFOUNDATIONCOLLECTIONURI}${SYSTEM_TEAMPROJECT}/_apis/git/repositories/${BUILD_REPOSITORY_ID}/pullRequests/${SYSTEM_PULLREQUEST_PULLREQUESTID}/threads?api-version=6.0"
-
 POST_RESPONSE=$(curl -s -X POST "$ADO_API_URL" \
   -H "Authorization: Bearer $ADO_PERSONAL_ACCESS_TOKEN" \
   -H "Content-Type: application/json" \
@@ -182,9 +387,55 @@ HTTP_STATUS=$(echo "$POST_RESPONSE" | tail -n1)
 RESPONSE_BODY=$(echo "$POST_RESPONSE" | sed '$d')
 
 if [ "$HTTP_STATUS" -ge 200 ] && [ "$HTTP_STATUS" -lt 300 ]; then
-  echo "Successfully posted comment to pull request."
+  echo "Successfully posted summary comment to pull request."
 else
-  echo "Error posting comment to pull request. HTTP Status: $HTTP_STATUS"
+  echo "Error posting summary comment to pull request. HTTP Status: $HTTP_STATUS"
   echo "Response: $RESPONSE_BODY"
   exit 1
+fi
+
+# 6. POST PR STATUS TO BLOCK/UNBLOCK MERGE BASED ON CRITICAL/HIGH ISSUES
+echo "Posting PR status..."
+
+# Determine status based on critical issues only
+CRITICAL_ISSUES=$(echo "$API_RESPONSE_BODY" | jq -r '.summary.critical // 0')
+
+if [ "$CRITICAL_ISSUES" -gt 0 ]; then
+  PR_STATUS="failed"
+  PR_DESCRIPTION="Found $CRITICAL_ISSUES critical severity issues that must be addressed"
+else
+  PR_STATUS="succeeded"
+  PR_DESCRIPTION="No critical severity issues found"
+fi
+
+# Azure DevOps PR Status API
+PR_STATUS_URL="${SYSTEM_TEAMFOUNDATIONCOLLECTIONURI}${SYSTEM_TEAMPROJECT}/_apis/git/repositories/${BUILD_REPOSITORY_ID}/pullRequests/${SYSTEM_PULLREQUEST_PULLREQUESTID}/statuses?api-version=7.1"
+
+PR_STATUS_PAYLOAD=$(jq -n \
+  --arg state "$PR_STATUS" \
+  --arg description "$PR_DESCRIPTION" \
+  --arg context "Code Review" \
+  --arg genre "continuous-integration" \
+  '{
+    "state": $state,
+    "description": $description,
+    "context": {
+      "name": $context,
+      "genre": $genre
+    }
+  }')
+
+PR_STATUS_RESPONSE=$(curl -s -X POST "$PR_STATUS_URL" \
+  -H "Authorization: Bearer $ADO_PERSONAL_ACCESS_TOKEN" \
+  -H "Content-Type: application/json" \
+  --data "$PR_STATUS_PAYLOAD" -w "\n%{http_code}")
+
+PR_STATUS_HTTP_CODE=$(echo "$PR_STATUS_RESPONSE" | tail -n1)
+PR_STATUS_BODY=$(echo "$PR_STATUS_RESPONSE" | sed '$d')
+
+if [ "$PR_STATUS_HTTP_CODE" -ge 200 ] && [ "$PR_STATUS_HTTP_CODE" -lt 300 ]; then
+  echo "Successfully posted PR status: $PR_STATUS"
+else
+  echo "Warning: Could not post PR status. HTTP Status: $PR_STATUS_HTTP_CODE"
+  echo "Response: $PR_STATUS_BODY"
 fi
