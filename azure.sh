@@ -162,7 +162,7 @@ if echo "$API_RESPONSE_BODY" | jq -e . > /dev/null 2>&1; then
     populate_existing_comments_map
 
     echo "Posting inline comments for issues..."
-    echo "$API_RESPONSE_BODY" | jq -r '.review.issues[] | @json' | while IFS= read -r issue_json; do
+    echo "$API_RESPONSE_BODY" | jq -r '.review.issues[] | select(.severity != "low") | @json' | while IFS= read -r issue_json; do
       file_path=$(echo "$issue_json" | jq -r '.file_path')
       line_number=$(echo "$issue_json" | jq -r '.line_number')
 
